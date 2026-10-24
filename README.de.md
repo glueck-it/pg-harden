@@ -7,8 +7,8 @@ prüft den Rechner, von dem aus verbunden wird, und führt auf ausdrücklichen B
 und Rückweg aus.
 
 Geprüft werden `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256, schwache Passwörter, Rollen und Rechte, `PUBLIC`-Rechte, `SECURITY DEFINER`-Funktionen,
-Protokollierung und die Betriebssystemseite (Dateirechte, Dienstkonto) von PostgreSQL 14 bis 18 und 19 RC1 — 72 Regeln, ein einzelnes PHP-Skript
-ohne weitere Abhängigkeiten. Getestet mit PostgreSQL 14 bis 18 und 19rc1 (Docker, Debian 13) sowie PostgreSQL 18 unter Windows 11
+Protokollierung und die Betriebssystemseite (Dateirechte, Dienstkonto) von PostgreSQL 14 bis 18 und 19 RC1 — 72 Regeln, ein PHP-Werkzeug
+ohne Composer-Abhängigkeiten (PHP 8.3 mit `pdo_pgsql` und `mbstring`). Getestet mit PostgreSQL 14 bis 18 und 19rc1 (Docker, Debian 13) sowie PostgreSQL 18 unter Windows 11
 ([tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)). Gepflegt von [Frank Glück](https://dozent.net) — Datenbankberater, Entwickler und Dozent. Impressum: <https://dozent.net/informationen/impressum>.
 
 **`check`, `plan`, `verify`, `client` und `rules` schreiben nichts auf den Server.** Jede Datenbankprüfung läuft als einzelne

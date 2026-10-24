@@ -6,7 +6,7 @@ pg-harden checks a PostgreSQL instance against a catalog of security rules, writ
 audits the machine you connect from, and — only on explicit command — applies selected fixes with a backup and a way back.
 It covers `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256 password storage, weak passwords, roles and privileges, `PUBLIC` grants,
 `SECURITY DEFINER` functions, logging, and the operating-system side (file permissions, service account) of PostgreSQL 14 to 18 and
-19 RC1. A single PHP command-line script, no other dependencies.
+19 RC1. A PHP command-line tool without Composer dependencies (PHP 8.3 with `pdo_pgsql` and `mbstring`).
 
 - **72 rules** (61 for the server, 11 for the client machine), each with severity, rationale, remediation and — where it is safe — a SQL or
   configuration fix with its rollback
