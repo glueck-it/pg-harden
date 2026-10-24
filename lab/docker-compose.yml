@@ -1,0 +1,24 @@
+# Übungsinstanz mit absichtlich schwacher Konfiguration ("gewachsene" Installation).
+# NUR lokal und zu Testzwecken: trust-Anmeldung, MD5-Passwörter, Superuser-Anwendung.
+#   docker compose -f lab/docker-compose.yml up -d
+#   php pg-harden.php check --host=127.0.0.1 --port=55432 --user=postgres
+#   docker compose -f lab/docker-compose.yml down -v
+services:
+  db:
+    image: postgres:18-alpine
+    container_name: pgharden-lab
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_INITDB_ARGS: --no-data-checksums
+    ports:
+      - "127.0.0.1:55432:5432"
+    command:
+      - postgres
+      - -c
+      - lo_compat_privileges=on
+      - -c
+      - log_parameter_max_length=-1
+      - -c
+      - debug_print_plan=on
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/10-weak.sql:ro

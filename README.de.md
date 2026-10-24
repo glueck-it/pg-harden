@@ -1,0 +1,339 @@
+# pg-harden — Prüf- und Härtungswerkzeug für PostgreSQL
+
+[English](README.md) · **Deutsch**
+
+Prüft eine PostgreSQL-Instanz gegen einen Regelkatalog, schreibt einen Änderungsplan, vergleicht Vorher/Nachher-Berichte,
+prüft den Rechner, von dem aus verbunden wird, und führt auf ausdrücklichen Befehl ausgewählte Korrekturen mit Sicherung
+und Rückweg aus.
+
+Geprüft werden `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256, schwache Passwörter, Rollen und Rechte, `PUBLIC`-Rechte, `SECURITY DEFINER`-Funktionen,
+Protokollierung und die Betriebssystemseite (Dateirechte, Dienstkonto) von PostgreSQL 14 bis 18 und 19 RC1 — 72 Regeln, ein einzelnes PHP-Skript
+ohne weitere Abhängigkeiten. Getestet mit PostgreSQL 14 bis 18 und 19rc1 (Docker, Debian 13) sowie PostgreSQL 18 unter Windows 11
+([tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)). Gepflegt von [Frank Glück](https://dozent.net) — Datenbankberater, Entwickler und Dozent. Impressum: <https://dozent.net/informationen/impressum>.
+
+**`check`, `plan`, `verify`, `client` und `rules` schreiben nichts auf den Server.** Jede Datenbankprüfung läuft als einzelne
+vorbereitete Anweisung in `BEGIN TRANSACTION READ ONLY … ROLLBACK`, mit `search_path = pg_catalog, pg_temp` und Zeitlimits.
+Hinter einem PgBouncer im Transaction-Pooling gelten Sitzungseinstellungen nicht zuverlässig — direkt verbinden. Nur
+`apply` und `rollback` schreiben, und nur mit `--execute` bzw. gegen ein Journal (siehe unten).
+
+## Bestimmungsgemäße Verwendung
+
+> pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme bestimmt. Die Passwortprüfung liest
+> `pg_authid` nur mit Superuser-Recht, rechnet eine kleine, fest umrissene Liste naheliegender Kandidaten sowie optional eine vom Betreiber bereitgestellte,
+> auf 100 Einträge begrenzte Liste betriebsspezifischer Begriffe nach (keine Wörterbücher, kein Brute-Force), erzeugt keine Fehlanmeldungen und gibt nie ein Passwort aus —
+> nur die Tatsache, dass eine Rolle einen Wert aus der Prüfliste verwendet. Der Client-Modus mit `--user` liest
+> Dateien und Umgebungen anderer Benutzerkonten und setzt Administrator- bzw. root-Rechte **und** die Berechtigung
+> voraus, diese Konten zu prüfen; gefundene Geheimnisse erscheinen nur mit Fundstelle und Zeile. Berichte können
+> rollenbezogene und damit personenbeziehbare Befunde enthalten: vertraulich behandeln, nur zur Behebung verwenden,
+> zeitnah löschen; wo Rollen Beschäftigten zugeordnet sind, Datenschutz und Mitbestimmung beachten. Eine Nutzung auf
+> fremden Systemen oder Konten ohne Berechtigung ist bestimmungswidrig.
+
+Derselbe Text steht in `--help` und im Kopf jedes Berichts, der Passwort- oder Client-Ergebnisse enthält.
+
+## Selbst prüfen — ohne Gewähr
+
+pg-harden ist ein Hilfsmittel, keine Freigabe. Die Software wird unter der MIT-Lizenz ohne jede Gewähr
+bereitgestellt (siehe `LICENSE`).
+
+- Befunde fachlich bewerten: nicht jeder Befund ist in jeder Umgebung ein Mangel, und nicht jeder Mangel hat
+  eine Regel im Katalog.
+- Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz
+  sicher ist.
+- Pläne sind Vorschläge. Jede Änderung selbst prüfen, in einer Testumgebung erproben und erst dann in Produktion
+  einspielen. `apply` führt aus, was du freigibst — mit Sicherung und Rückweg, aber ohne Garantie für deine Anwendungen.
+- Die Zuordnung zu Normen ist keine Aussage über deren Erfüllung.
+
+Eine Kurzfassung dieses Hinweises steht in `--help`, am Ende jedes Berichts und in jeder Plan-Datei.
+
+## Voraussetzungen
+
+- PHP 8.3+ mit `pdo_pgsql` und `mbstring` (für die Zertifikatsprüfung von `client` zusätzlich `openssl`,
+  unter Linux für `--user` und Dateirechte `posix`), keine weiteren Abhängigkeiten
+- Windows: Windows PowerShell 5.1 (liegt dem System bei) für ACLs, Dienstkonto und Aufgabenplanung
+- Passwort über `PGPASSWORD` oder die pgpass-Datei — nie auf der Kommandozeile
+- Rechte: Superuser für den vollen Umfang. Mit weniger Rechten laufen fast alle Regeln; ausgelassene werden
+  als „übersprungen“ und „unvollständig“ gemeldet. Ausnahme: fehlt `SELECT` auf `pg_database` (nach `db.catalog_visibility`),
+  bricht der Lauf ab, weil die Datenbankliste fehlt:
+
+```sql
+CREATE ROLE pgharden LOGIN;                                        -- der Präfix pg_ ist für Systemrollen reserviert
+GRANT pg_monitor TO pgharden;                                      -- enthält pg_read_all_settings
+GRANT EXECUTE ON FUNCTION pg_hba_file_rules() TO pgharden;         -- Regeln zu pg_hba.conf: Funktion ...
+GRANT SELECT ON pg_hba_file_rules TO pgharden;                     -- ... und View
+-- nur auth.md5_passwords und auth.weak_passwords brauchen Superuser (pg_authid)
+-- Nach db.catalog_visibility (siehe unten) zusätzlich, in jeder Datenbank:
+-- GRANT SELECT ON TABLE pg_catalog.pg_database, pg_catalog.pg_roles TO pgharden;
+```
+
+## Befehle
+
+```bash
+php pg-harden.php check  --host=db1 --user=postgres                       # Bericht im Terminal
+php pg-harden.php check  --host=db1 --user=postgres --format=html --out=report.html
+php pg-harden.php plan   --host=db1 --user=postgres --dir=plan-2026-10-23  # neues Verzeichnis, schreibt nur Dateien
+php pg-harden.php verify --host=db1 --user=postgres --previous=plan-2026-10-23/report.json
+php pg-harden.php client [--user=konto] [--scan=/opt/backup,/srv/compose]  # Rechner prüfen, keine Datenbankverbindung
+php pg-harden.php apply  --host=db1 --user=postgres                        # Trockenlauf: zeigt, was geschähe
+php pg-harden.php apply  --host=db1 --user=postgres --execute --dir=apply-2026-10-24 [--yes]
+php pg-harden.php rollback --host=db1 --user=postgres --dir=apply-2026-10-24
+php pg-harden.php check  --host=db1 --user=postgres --extra-candidates=extra-candidates.txt   # + eigene Begriffe (max. 100)
+php pg-harden.php rules
+```
+
+Verbindung: `--host`, `--port`, `--dbname` (Einstieg, Standard `postgres`), `--sslmode`, `--databases=a,b`.
+Ohne `--host`/`--port` gelten die libpq-Vorgaben (`PGHOST`, `PGPORT`, Socket). Für entfernte Hosts ist
+`sslmode=require` voreingestellt; `verify-full` ist vorzuziehen.
+
+Exit-Codes: `0` keine Befunde · `1` Befunde · `3` keine Befunde, aber nicht alles geprüft (fehlende Rechte,
+Fehler, ausgelassene oder gesperrte Datenbanken; bei `verify` auch abweichender Server, Benutzer oder Umfang) ·
+`2` Abbruch (auch unbekannte Optionen; bei `apply`/`rollback` ein fehlgeschlagener Lauf).
+
+Ohne Zertifikatsprüfung (`verify-full`) meldet der Bericht bei entfernten Hosts einen Hinweis.
+
+## Der Plan
+
+Der Plan ist ein **automatisch erzeugter Vorschlag**. Auswirkungen auf Anwendungen vor dem Ausführen in einer
+Testumgebung prüfen.
+
+| Datei | Inhalt |
+|---|---|
+| `90-pg-harden.conf` | Parameter für `include_dir 'conf.d'` (am Ende von `postgresql.conf`). Warnt, wenn ein Wert von der Kommandozeile, aus `postgresql.auto.conf` oder per `ALTER DATABASE/ROLE … SET` kommt und die Datei deshalb nicht greift |
+| `harden_<db>.sql` | SQL-Korrekturen je Datenbank in einer Transaktion, je Korrektur mit Rückweg als Kommentar. Die erste Anweisung bricht ab, wenn die Datei in einer anderen Datenbank läuft. Mit der Zieldatenbank selbst verbinden und mit `psql -v ON_ERROR_STOP=1 -f <datei>` einspielen — der Plan nennt bewusst keine fertige Befehlszeile mit dem Datenbanknamen (psql liest Namen mit `=` als Verbindungsangabe) |
+| `MANUELL.md` | Befunde ohne automatische Korrektur (auch `pg_hba.conf`-Änderungen, die nur `apply` ausführt), nicht planbare Objekte, nicht vollständig geprüfte Regeln |
+| `report.json` | Ausgangsbericht für `verify` |
+
+Stufen je Regel: `auto` (geringes Betriebsrisiko, aktiv im Plan), `confirm` (auskommentiert, bewusst
+freischalten), `manual` (nur in `MANUELL.md`). Objekte mit Steuer- oder Formatzeichen im Namen (auch
+Bidi-Zeichen) und Korrektur-SQL mit Zeichen, die psql auswerten würde, werden nie in eine SQL-Datei geschrieben.
+Das Plan-Verzeichnis muss neu oder leer sein und dem aufrufenden Benutzer gehören; Dateien werden exklusiv
+angelegt, bei einem Abbruch wird nichts Halbfertiges zurückgelassen.
+
+`verify` wertet einen früheren Befund nur dann als behoben, wenn genau diese Stelle — bei Datenbank-Befunden
+genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erscheint er als „nicht vergleichbar“.
+
+## `apply` — Plan ausführen, mit Schutz vor dem Aussperren
+
+`apply` ist der einzige Befehl, der den Server verändert. Ohne `--execute` zeigt er nur, was er tun würde.
+
+- **Auswahl:** ausgeführt werden Regeln der Stufe `auto`. Regeln der Stufe `confirm` brauchen ihre Kennung in
+  `--include-confirm=ID,ID` — eine Sammelfreigabe gibt es nicht. `--rules=ID,ID` beschränkt den Lauf.
+- **Verbindung:** Schreiben (`apply --execute`, `rollback`) über eine entfernte Verbindung geht nur mit `--sslmode=verify-full`
+  (`verify-ca` prüft den Rechnernamen nicht); ohne diese Prüfung bricht `apply` ab. Dasselbe gilt für die Passwortprüfung in `check` (sie liest die Verifier).
+- **Konfigurationsdateien** (`postgresql.conf`, `pg_hba.conf`) kann `apply` nur ändern, wenn es **auf dem Server selbst**
+  läuft (Beleg: `postmaster.pid` dieses Rechners gehört zur verbundenen Instanz) und die Schreibrechte hat
+  (Dienstkonto bzw. Administrator/root). Sonst werden diese Aktionen mit Begründung übersprungen; SQL-Korrekturen
+  laufen auch aus der Ferne.
+- **Parameter** gehen nach `conf.d/90-pg-harden.conf`; fehlt ein aktives `include_dir`, ergänzt `apply` es am Ende
+  von `postgresql.conf` (Sicherung inklusive). Werte, die von der Kommandozeile des Servers oder aus
+  `postgresql.auto.conf` überschrieben würden, werden nicht geschrieben. Parameter mit Neustart werden geschrieben
+  und gemeldet — **`apply` startet den Server nie neu.**
+- **`pg_hba.conf`:** es ändert sich nur das eine Feld (Methode `trust`/`md5`/`password` → `scram-sha-256`, `host` →
+  `hostssl`), Kommentare und Abstände bleiben. `local`-Zeilen fasst `apply` nie an — der Zugang über den
+  Unix-Socket bleibt. Vorbedingungen gegen Aussperren: alle anmeldefähigen Rollen haben ein SCRAM-Passwort
+  (bei `trust` auch: ein Passwort überhaupt), bei `hostssl` ist `ssl` an.
+- **Ablauf der Dateiänderung:** Sicherung ins Journal → schreiben (am Ort, Besitzer und Rechte bleiben) → der Server prüft
+  die Dateien auf der Platte (`pg_hba_file_rules`, `pg_file_settings`; jede Abweichung vom erwarteten Ergebnis, jeder
+  Fehler führt zur Wiederherstellung **ohne** Neuladen) → `pg_reload_conf()` → **neue** Anmeldung mit denselben
+  Zugangsdaten (bestehende Sitzungen überleben eine kaputte `pg_hba.conf` und beweisen nichts) → bei Misserfolg
+  Sicherungen zurück, erneut laden, erneut prüfen.
+- **Dateizugriff als root:** `apply` arbeitet an Dateien, die dem Dienstkonto gehören, mit dessen Identität — ein vom Dienstkonto
+  untergeschobener symbolischer Link führt so nicht über dessen Rechte hinaus. Dateien werden über eine Temp-Datei ersetzt (Windows:
+  erst schreiben, dann kürzen), nie vorher geleert. Stirbt der Prozess mitten in der Dateiphase (Fehler, Strg+C, kill), spielt ein Wächter
+  die Sicherungen zurück — unter Linux nur mit den PHP-Erweiterungen `pcntl` und `posix`; fehlen sie, ändert `apply` keine Dateien.
+- **Neuladen:** ein nicht bestätigtes Neuladen zählt als Fehler (der Anmeldetest würde sonst noch die alte Konfiguration sehen).
+- **Grenzen des Anmeldetests:** er prüft die Anmeldung dieses Werkzeugs mit denselben Zugangsdaten — nicht Anwendungen, andere Rollen
+  oder Clients ohne TLS. Vor `host` → `hostssl` weist `apply` deshalb ab, wenn gerade Verbindungen anderer Rechner ohne TLS bestehen.
+- **SQL:** je Datenbank in einer Transaktion mit `lock_timeout`; nur einzelne einfache `GRANT`-, `REVOKE`- und `ALTER ROUTINE`-Anweisungen in
+  genau den Formen, die der Regelkatalog erzeugt (Tabellen nur als Liste von `pg_catalog`-Objekten der Katalog-Sichtbarkeit, nie eine
+  Anwendungstabelle), und nur mit Rückweg. Der Rückweg muss die genaue Umkehrung des Fixes sein. Der Server selbst lehnt Mehrfachanweisungen ab
+  (`prepare`). Der Rückweg steht im Journal, **bevor** committet wird.
+- **Journal** (`--dir`, neues Verzeichnis): `apply-log.json`, `backup/`, `report-before.json`, `report-after.json`. Nach dem Lauf
+  prüft `apply` mit **neuen** Verbindungen erneut und zeigt behoben/neu/offen.
+- **`rollback --dir=<Journal>`** spielt die Sicherungen zurück, lädt neu, prüft eine neue Anmeldung und führt die
+  gespeicherten Rückweg-Anweisungen aus. Das Journal wird nur angenommen, wenn es dem ausführenden Benutzer gehört und für andere
+  unzugänglich ist, zum selben Cluster gehört (Systemkennung, Datenverzeichnis) und nur Pfade nennt, die `apply` auf diesem Server
+  schreiben würde. Ein Journal lässt sich nur einmal zurücknehmen. Spätere Änderungen Dritter an denselben Dateien werden dabei überschrieben.
+- Ohne Terminal verlangt `--execute` zusätzlich `--yes`; ein zweiter `apply` gleichzeitig auf demselben Server wird abgewiesen.
+
+## Schwache Passwörter (`auth.weak_passwords`)
+
+Die gespeicherten SCRAM-SHA-256- und md5-Werte aus `pg_authid` werden für eine kleine, fest im Programm stehende Liste
+nachgerechnet (Rollenname mit Varianten und Jahreszahlen, `postgres`, `password`, `admin` u. ä.). Keine Anmeldeversuche,
+keine Last am Server, keine externen Wortlisten oder Wörterbücher (die feste Liste steht im Programm; optional ergänzt eine kleine Betreiberliste, siehe unten). Ausgegeben wird nur die Rolle — nie das Passwort, nicht einmal, welcher
+Kandidat passte. Superuser nötig.
+
+**Eigene Begriffe:** `--extra-candidates=DATEI` ergänzt die feste Liste um Begriffe des Betriebs (Firmenname, Produkte, Ort, Hausstandard).
+Bewusst begrenzt, damit es eine Prüfliste bleibt und kein Wörterbuch wird: höchstens 100 Einträge (einer je Zeile), je höchstens 64 Zeichen, nur ASCII; mehr
+bricht den Lauf ab. Die Begriffe werden genau so geprüft, wie sie dastehen (keine automatischen Varianten). Die Datei muss dem ausführenden
+Benutzer gehören und für andere unzugänglich sein (Unix: `chmod 600`; Windows: Besitzer sind Sie oder die Administratoren, und die ACL nennt nur Sie, SYSTEM und Administratoren). Sie wird nie
+über die Kommandozeile oder stdin übergeben. Der Bericht nennt nur, *wie viele* Begriffe geprüft wurden — weder Inhalt noch Treffer. Zeilen mit Leerzeichen am Anfang oder Ende werden abgewiesen (meist ein Versehen).
+Nur betriebsspezifische Begriffe aufnehmen, keine personenbezogenen Daten Dritter (Namen von Beschäftigten oder Angehörigen), und die Datei nach dem Lauf
+löschen. Ein Beispiel liegt unter `lab/extra-candidates.example.txt`.
+
+## Katalog-Sichtbarkeit (`db.catalog_visibility`)
+
+Standardmäßig kann jede angemeldete Rolle alle Datenbank- und Rollennamen lesen (`\l`, `\du`, GUI-Werkzeuge) — auch die von
+Datenbanken, in die sie sich nicht verbinden darf. `CONNECT` zu entziehen (`db.public_connect`) sperrt den Zugang, versteckt aber
+die Namen nicht. Die Regel `db.catalog_visibility` (Stufe `confirm`) entzieht `PUBLIC` das Leserecht auf `pg_database`, `pg_roles`,
+`pg_user`, `pg_group`, `pg_auth_members`, `pg_stat_database`, `pg_stat_database_conflicts` und `pg_shdescription`. Der Fix ist ein
+einzelnes `REVOKE` je Datenbank mit `GRANT` als Rückweg und läuft über `apply` mit `--include-confirm=db.catalog_visibility`.
+
+Gemessen in PostgreSQL 14 bis 19rc1 (`tests/lab-visibility.sh`, Ergebnis in allen Versionen gleich):
+
+- **Das Recht gehört jeder Datenbank einzeln.** `pg_database` ist ein gemeinsamer Katalog, seine Berechtigung steht aber in der
+  `pg_class` jeder Datenbank. Ein `REVOKE` wirkt nur in der Datenbank, in der es läuft. Die Regel prüft deshalb jede Datenbank
+  und `template1` (neue Datenbanken erben von dort). `template0` wird nicht geprüft: eine Datenbank, die mit `TEMPLATE template0`
+  angelegt wird, trägt den Entzug nicht, erscheint aber beim nächsten `check` als Befund und braucht den Entzug von Hand oder per `apply`.
+- **Was danach fehlschlägt** (für alle Rollen ohne eigenes `SELECT`): `\l`, `\du`, Baumansichten und Auswahllisten der
+  GUI-Werkzeuge, `pg_dump` als Nicht-Superuser (braucht `pg_database` und `pg_roles`) und alles, was diese Kataloge liest.
+  `\d`, `\dt`, `\dn`, `\df` und `\dp` liefen im Test weiter. Anwendungen, die diese Kataloge lesen — Monitoring (etwa ein Exporter
+  auf `pg_stat_database`), Treiber mit Metadatenabfragen, Verwaltungswerkzeuge —, brauchen vorher ein gezieltes `SELECT`; das hängt von der
+  Anwendung ab und lässt sich hier nicht vorhersagen: in einer Testumgebung erproben. Superuser sind nicht betroffen.
+  `pg-harden` selbst braucht für seine Rolle (`pgharden`) dann `GRANT SELECT ON TABLE pg_catalog.pg_database, pg_catalog.pg_roles`
+  in jeder Datenbank; ohne dieses Recht auf `pg_database` bricht `check` mit einer entsprechenden Meldung ab (Exit-Code 2), ohne das
+  Recht auf `pg_roles` scheitern einzelne Regeln.
+- **Der Entzug steht im Dump und überstand die Tests.** `pg_dump` führt ihn als `REVOKE … ON TABLE pg_catalog.…` mit. Gemessen
+  (`tests/lab-upgrade.sh`): nach `pg_upgrade` von 17 auf 18 und von 14 auf 19rc1 sowie nach Wiederherstellung eines `pg_dumpall` fehlt `PUBLIC`
+  das Leserecht in `template1` und in allen Datenbanken; eine neue Datenbank aus `template1` erbt den Entzug. Nach jedem Upgrade
+  oder jeder Wiederherstellung trotzdem `check` fahren.
+- **Rückweg:** `rollback` gibt `PUBLIC` das Leserecht zurück (gemessen: der Zugriff funktioniert wieder und der gespeicherte Rechtetext
+  trägt wieder `=r/postgres`). Er betrifft nur die Datenbanken, die beim Fix geprüft wurden — Datenbanken, die danach aus `template1`
+  entstanden, erben den Entzug und brauchen das `GRANT` selbst. Wer einem Objekt das Recht inzwischen bewusst entzogen hat, bekommt es durch
+  den Rückweg ebenfalls zurück.
+- **Grenzen — das ist keine Geheimhaltung.** Rollennamen lassen sich weiter über ihre Kennung ermitteln
+  (`SELECT g::oid::regrole FROM generate_series(1, 70000) g`), und die Fehlermeldung beim Verbindungsversuch unterscheidet
+  `permission denied for database` von `database … does not exist` — damit ist erkennbar, ob eine Datenbank existiert. Die Liste der
+  acht Objekte ist nicht erschöpfend: `pg_stat_activity` zeigt weiter Datenbank- und Rollennamen laufender Sitzungen (gemessen: eine
+  Sitzung von `rb` in `db_b` war für `ra` sichtbar); Replikationssichten und Tablespaces wurden nicht untersucht. Eine echte Zeilenfilterung gibt es im Katalog nicht: Row-Level-Security auf Systemkatalogen
+  weist PostgreSQL ab (gemessen in 18). Wer Mandanten wirklich trennen muss, betreibt **getrennte Cluster** je Mandant.
+- **Systemviews umschreiben** (`CREATE OR REPLACE VIEW pg_catalog.pg_roles …`) ging in 18 ohne `allow_system_table_mods`, ist aber ein
+  Eingriff in `pg_catalog`, den kein Dump mitführt (Systemviews entstehen mit `initdb` neu); `pg_database` selbst ist
+  eine Tabelle und lässt sich so nicht filtern. pg-harden bietet das nicht an.
+
+**Gefilterte Sicht für Anwender** (manuell, als Superuser in jeder Datenbank, in der sie gebraucht wird — pg-harden legt keine
+Objekte an; der Eigentümer braucht `SELECT` auf `pg_database`). Die Ansicht läuft mit den Rechten ihres Eigentümers,
+`has_database_privilege` wertet aber den aufrufenden Benutzer aus. **`security_barrier` ist nötig:** ohne es konnte in der Probe (PostgreSQL 18)
+eine Funktion, die ein Anwender in `WHERE` einsetzte, vor dem Filter der Ansicht laufen und die Namen aller Datenbanken sehen;
+mit `security_barrier` sah sie nur die erlaubten.
+
+```sql
+CREATE SCHEMA visibility;
+GRANT USAGE ON SCHEMA visibility TO PUBLIC;
+CREATE VIEW visibility.databases WITH (security_barrier = true) AS
+SELECT d.datname
+  FROM pg_catalog.pg_database d
+ WHERE NOT d.datistemplate
+   AND pg_catalog.has_database_privilege(d.datname, 'CONNECT');
+GRANT SELECT ON visibility.databases TO PUBLIC;
+```
+
+## Betriebssystem-Regeln (Kategorie „Betriebssystem“, `check`)
+
+Nur wenn pg-harden auf dem Server läuft. Der Bericht sagt in der Kopfzeile, ob die Regeln geprüft wurden oder warum nicht
+(Server entfernt oder im Container; `postmaster.pid` nicht lesbar). Geprüft werden Rechte von Datenverzeichnis,
+Konfigurations- und Protokolldateien, TLS-Schlüssel und Socket (Linux: Modi; Windows: ACL gegen Jeder/Benutzer/
+Authentifizierte Benutzer), Dienstkonto, Dienstdatei und Prozessumgebung auf Klartext-Geheimnisse (nur Fundstelle und Name),
+umask, Log-Verzeichnis auf eigenem Datenträger, freier Platz, Paketherkunft (Linux) bzw. Signatur (Windows).
+
+## `client` — der Rechner, von dem aus verbunden wird
+
+Keine Datenbankverbindung. Geprüft werden für das aktuelle oder (mit `--user`, Administrator/root nötig) ein anderes Konto:
+`pg_service.conf` mit `password=`, Passwortdatei (Windows-ACL, Lage in Cloud-Ordnern, auf Netzfreigaben oder in
+Roaming-Profilen, Superuser-Einträge mit Platzhalter-Host, verdeckte Zeilen, fehlende Loopback-Einträge; unter Unix nur als
+Hinweis, weil libpq die Datei bei offenen Rechten ohnehin ignoriert), `PGPASSWORD` in Umgebung und Registry, Passwörter in
+Profilen, Skripten, Compose- und `.env`-Dateien, Cron, systemd-Dateien und der Windows-Aufgabenplanung, Client-Schlüssel
+und -Zertifikate (Rechte, Ablauf). Gefundene Geheimnisse erscheinen nur mit Fundstelle und Zeile.
+
+`--user` durchsucht das gesamte Profil des fremden Kontos, nicht nur PostgreSQL-Dateien. Bei Konten von Beschäftigten braucht das eine
+Rechtsgrundlage (je nach Fall § 26 BDSG oder Art. 6 Abs. 1 lit. f DSGVO) und ggf. eine Betriebsvereinbarung; Berichte tragen Kontoname, Rechnername und Pfade. Zusätzlich zum Profil liest
+`client` systemweite Orte (`/etc/environment`, `/etc/profile.d`, `/etc/cron.d`, `/etc/systemd/system`, `/usr/local/bin`) — auch bei `--user`.
+
+Die Suche im Profilordner ist begrenzt (Tiefe 4, 20 000 Einträge, 25 s; Punkt-Ordner, Cloud-Ordner und reine Datenordner werden
+ausgelassen — Dateien in Cloud-Ordnern würden beim Lesen heruntergeladen). Weitere Verzeichnisse mit `--scan=a,b`.
+
+## Berichte enthalten Rollen-, Objekt- und Netznamen
+
+Rollennamen sind oft Personenkennungen, `pg_hba`-Zeilen enthalten Netze. Unter Linux und macOS werden Berichte
+und Pläne mit Dateirechten nur für den Eigentümer geschrieben; unter Windows gilt die vererbte Ordner-ACL — dort
+einen geschützten Ordner wählen. Vertraulich ablegen, vor einer Weitergabe an Dritte prüfen, Aufbewahrung
+festlegen.
+
+## Regeln und Zuordnungen
+
+- `rules/*.json` — Regeln als Daten: Prüfung per Parameter (`setting`), SQL (`query`, je Befund eine Zeile) oder
+  eingebauter Prüfung (`weak_passwords`, `os`, `client`), Version, benötigte Rechte (`requires`), Plattform, Befehl
+  (`check`/`client`), Korrektur (`conf`, `sql`, `hba`, `manual`) und Rückweg, Begründung
+- `mappings/*.json` — Zuordnung zu ISO 27001:2022 Annex A (Kennungen noch ungeprüft) und BSI APP.4.3
+  (Platzhalter). Nur Kennungen und Kurztitel in Anlehnung an die Norm, kein Normtext
+
+Das Werkzeug liefert technische Prüfergebnisse, die in einem Audit als Beleg herangezogen werden können. Die
+Zuordnung zeigt nur das Ergebnis der jeweils zugeordneten Regeln — keine Aussage, ob eine Anforderung der Norm
+erfüllt ist; organisatorische Anteile prüft es nicht.
+
+## Testinstanz
+
+`lab/` startet ein PostgreSQL 18 mit absichtlich schwacher Konfiguration und Angriffsfällen für das Werkzeug
+selbst (nur an 127.0.0.1 gebunden; Docker 28 oder neuer). Die Rollen `weak_*` und `analyst` haben absichtlich
+naheliegende Passwörter für die Passwortprüfung:
+
+```bash
+docker compose -f lab/docker-compose.yml up -d
+php pg-harden.php check --host=127.0.0.1 --port=55432 --user=postgres
+docker compose -f lab/docker-compose.yml down -v
+```
+
+Betriebssystem-Regeln, `apply` und `rollback` brauchen Zugriff auf die Dateien des Servers. Das Lab-Programm läuft im
+Container; um sie dort zu üben, PHP im Container installieren (`apk add php84 php84-pdo_pgsql php84-mbstring php84-posix`),
+das Verzeichnis hineinkopieren und als root im Container ausführen. Übungen nur gegen `lab/` — nie gegen Produktivsysteme.
+
+## Tests
+
+`tests/` enthält: `allowlist-test.php` (Unit-Test der Allowlist, die `apply` und `rollback` passieren müssen; `php tests/allowlist-test.php`),
+`lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container), `lab-visibility.sh` und `lab-upgrade.sh` (Katalog-Sichtbarkeit,
+`pg_upgrade`, Wiederherstellung) und `run-version-matrix.sh` mit `matrix-table.php` (Versionsmatrix, Ergebnis in `VERSIONSMATRIX.md`).
+Die Container-Skripte ändern Passwörter, Rollen und Datenbanken und starten nur mit `PGHARDEN_LAB=1` — **ausschließlich in einem
+Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
+
+## Stand
+
+0.3.0 (24.10.2026): `check`, `plan`, `verify`, `client`, `apply`, `rollback`, `rules`; 72 Regeln (61 für `check`, 11 für `client`).
+Neu gegenüber 0.2.0: Passwortprüfung ohne Anmeldeversuch, Betriebssystem-Regeln Linux und Windows, `client`, `apply`/`rollback`
+mit Schutz vor dem Aussperren, `hba`-Korrekturen, Regel `db.catalog_visibility` (Katalog-Sichtbarkeit). Getestet mit PostgreSQL 14 bis 18
+und 19rc1 (`tests/VERSIONSMATRIX.md`); PostgreSQL 19 ist noch ein Release Candidate. Geplant: Rechte Soll/Ist gegen eine Soll-Datei, manuelle Bestätigungen und
+Belegpaket mit Hash, Pseudonymisierung von Berichten, BSI-Kennungen, OSCAL, englische Texte.
+
+## Lizenz
+
+MIT-Lizenz, Copyright (c) 2026 Frank Glück (Glück IT) — siehe [LICENSE](LICENSE). Gilt für Code, Regelkatalog und
+Zuordnungen; sie enthalten eigene Texte, die Kennungen der Normen und eigene Kurztitel in Anlehnung daran, aber
+keine Norm- oder CIS-Texte. Zwingende gesetzliche Haftung (insbesondere für Vorsatz, Arglist, die Verletzung von Leben, Körper und Gesundheit sowie nach dem Produkthaftungsgesetz) bleibt unberührt.
+
+pg-harden ist ein unabhängiges Werkzeug und steht in keiner Verbindung zum PostgreSQL-Projekt oder zur PostgreSQL Community Association.
+PostgreSQL, Docker, Debian, Windows und weitere genannte Namen sind Marken ihrer jeweiligen Inhaber und werden hier nur zur Bezeichnung der
+betreffenden Produkte verwendet, ohne eine Verbindung oder Billigung nahezulegen.
+
+## Verwandte Projekte und Schulungen
+
+- **[pg-clusterbackup](https://github.com/glueck-it/pg-clusterbackup)** — sichert jede Datenbank jedes laufenden PostgreSQL-Clusters in einem
+  zeitgesteuerten Job (PHP, Bash, PowerShell).
+- **[PostgreSQL Konfigurator](https://dozent.net/produkte/postgresql-konfigurator)** — Webwerkzeug für hardwareangepasste `postgresql.conf`-Konfigurationen.
+- **[Seminar: PostgreSQL Security und Härtung](https://dozent.net/seminare/postgresql/postgresql-security-haertung)** (Schulung) — der fachliche Hintergrund
+  zu den Regeln dieses Werkzeugs.
+
+## Über den Autor
+
+Entwickelt und gepflegt von **Frank Glück** ([Glück IT](https://dozent.net)) — Berater, Entwickler und Dozent für Datenbanken und
+Programmiersprachen. Ein großer Teil der Projektarbeit sind Migrationen nach PostgreSQL, etwa von
+[Oracle](https://dozent.net/seminare/postgresql/migration/migration-von-oracle-zu-postgresql),
+[SQL Server](https://dozent.net/seminare/postgresql/migration/postgresql-migration-von-sql-server),
+[DB2](https://dozent.net/seminare/postgresql/migration/postgresql-migration-von-db2),
+[Informix](https://dozent.net/seminare/postgresql/migration/postgresql-migration-von-informix),
+[Sybase](https://dozent.net/seminare/postgresql/migration/postgresql-migration-von-sybase) oder
+[MS Access](https://dozent.net/seminare/postgresql/migration/postgresql-migration-von-ms-access).
+
+- Hilfe bei PostgreSQL, einer Sicherheitsprüfung, einer Migration oder der Sicherungsstrategie? [Kontakt](https://dozent.net).
+- Seminare zu [PostgreSQL-Administration](https://dozent.net/seminare/postgresql/postgresql-administration),
+  [Performance Tuning](https://dozent.net/seminare/postgresql/postgresql-performance-tuning),
+  [PL/pgSQL](https://dozent.net/seminare/postgresql/plpgsql-programmierung), SQL Server (T-SQL/SSRS/SSAS),
+  [PHP](https://dozent.net/seminare/programmieren/php), JS und weiteren Webtechnologien.
+- Außerdem entsteht [Inside Filings](https://inside-filings.com/news) — auffällige Insider-, Kongress-/Weißes-Haus- und 13F-Bewegungen aus SEC-Meldungen und weiteren amtlichen Veröffentlichungen.

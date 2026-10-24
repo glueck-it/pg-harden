@@ -1,0 +1,26 @@
+# Reports, plans and journals contain role, object and network names — never commit them
+plan-*/
+apply-*/
+report*.json
+report*.html
+harden_*.sql
+90-pg-harden.conf
+MANUELL.md
+
+# Credentials and keys, in case test material lands in the folder
+.pgpass
+pgpass.conf
+pg_service.conf
+*.pem
+*.key
+
+# Operator term lists for the weak-password check (the example file is kept)
+extra-candidates*.txt
+!lab/extra-candidates.example.txt
+
+# Logs, editor and OS cruft
+*.log
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

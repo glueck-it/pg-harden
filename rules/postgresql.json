@@ -1,0 +1,782 @@
+{
+  "catalog": "postgresql",
+  "version": "2026.10",
+  "language": "de",
+  "rules": [
+    {
+      "id": "patch.supported_major",
+      "title": "Hauptversion hat laut Katalogstand noch Support",
+      "category": "Patch-Stand",
+      "severity": "high",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "WITH eol(major, until) AS (VALUES (13, DATE '2025-11-13'), (14, DATE '2026-11-12'), (15, DATE '2027-11-11'), (16, DATE '2028-11-09'), (17, DATE '2029-11-08'), (18, DATE '2030-11-14')), v AS (SELECT current_setting('server_version_num')::int / 10000 AS major) SELECT current_setting('server_version') AS object, CASE WHEN e.until IS NULL THEN 'Hauptversion ' || v.major || ' ohne Support (älter als der Katalog)' WHEN e.until < current_date THEN 'Support endete am ' || to_char(e.until, 'DD.MM.YYYY') ELSE 'Support endet am ' || to_char(e.until, 'DD.MM.YYYY') END AS detail FROM v LEFT JOIN eol e ON e.major = v.major WHERE (e.until IS NULL AND v.major < 13) OR e.until < current_date + 90"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Für Hauptversionen ohne Support erscheinen keine Sicherheitskorrekturen mehr. Die Daten folgen der Versionsrichtlinie der PostgreSQL Global Development Group (Katalogstand 10/2026); ein Befund entsteht ab 90 Tagen vor dem Ende. Der Minor-Stand wird nicht geprüft.",
+      "remediation": "Major-Upgrade planen (pg_upgrade oder logische Replikation). Minor-Updates zusätzlich zeitnah einspielen. Tabelle in dieser Regel mit jeder neuen Hauptversion ergänzen."
+    },
+    {
+      "id": "patch.catalog_current",
+      "title": "Support-Tabelle des Katalogs kennt die laufende Hauptversion",
+      "category": "Patch-Stand",
+      "severity": "low",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_setting('server_version') AS object, 'Hauptversion ' || (current_setting('server_version_num')::int / 10000) || ' ist neuer als die Support-Tabelle — Katalog aktualisieren' AS detail WHERE current_setting('server_version_num')::int / 10000 > 18"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ohne Eintrag kann patch.supported_major das Support-Ende dieser Version nie melden.",
+      "remediation": "pg-harden aktualisieren bzw. die Tabelle in patch.supported_major ergänzen."
+    },
+    {
+      "id": "conf.role_db_overrides",
+      "title": "Sicherheitsparameter sind nicht je Rolle oder Datenbank abgeschwächt",
+      "category": "Konfiguration",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT coalesce('Rolle ' || r.rolname, 'alle Rollen') || ' / ' || coalesce('Datenbank ' || d.datname, 'alle Datenbanken') AS object, cfg AS detail FROM pg_db_role_setting s LEFT JOIN pg_database d ON d.oid = s.setdatabase LEFT JOIN pg_roles r ON r.oid = s.setrole CROSS JOIN LATERAL unnest(s.setconfig) AS cfg WHERE split_part(cfg, '=', 1) IN ('password_encryption', 'log_connections', 'log_disconnections', 'log_statement', 'log_line_prefix', 'log_parameter_max_length', 'lo_compat_privileges', 'row_security', 'idle_in_transaction_session_timeout', 'temp_file_limit', 'statement_timeout', 'pgaudit.log', 'pgaudit.log_relation') ORDER BY 1, 2"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "ALTER ROLE/DATABASE … SET überschreibt die Server-Konfiguration für diese Rolle oder Datenbank. Die übrigen Prüfungen sehen nur die eigene Sitzung; eine Rolle kann sich so z. B. selbst password_encryption = md5 oder log_statement = none setzen.",
+      "remediation": "Jeden Eintrag fachlich begründen oder mit ALTER ROLE/DATABASE … RESET entfernen."
+    },
+    {
+      "id": "net.listen_addresses",
+      "title": "Server lauscht nicht auf allen Netzwerkschnittstellen",
+      "category": "Netzwerk und TLS",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'listen_addresses' AS object, current_setting('listen_addresses') AS detail WHERE EXISTS (SELECT 1 FROM unnest(string_to_array(current_setting('listen_addresses'), ',')) AS a WHERE trim(a) IN ('*', '0.0.0.0', '::'))"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Jede zusätzliche Schnittstelle ist eine Angriffsfläche. Eine Firewall davor mildert das, ersetzt aber die Einschränkung nicht.",
+      "remediation": "listen_addresses auf die tatsächlich benötigten Adressen setzen (Neustart erforderlich)."
+    },
+    {
+      "id": "tls.ssl_enabled",
+      "title": "TLS ist eingeschaltet",
+      "category": "Netzwerk und TLS",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "ssl", "op": "eq", "value": "on" },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ohne TLS gehen Abfragen, Ergebnisse und bei schwachen Verfahren auch Anmeldedaten im Klartext über das Netz.",
+      "remediation": "Zertifikat und Schlüssel bereitstellen (ssl_cert_file, ssl_key_file), ssl = on, Konfiguration neu laden."
+    },
+    {
+      "id": "tls.min_protocol",
+      "title": "Mindestversion TLS 1.2",
+      "category": "Netzwerk und TLS",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "min_version": 120000,
+      "check": { "type": "setting", "name": "ssl_min_protocol_version", "op": "in", "value": ["TLSv1.2", "TLSv1.3"] },
+      "fix": { "type": "conf", "settings": { "ssl_min_protocol_version": "TLSv1.2" } },
+      "automation": "confirm",
+      "rationale": "TLS 1.0 und 1.1 gelten als unsicher.",
+      "remediation": "ssl_min_protocol_version = 'TLSv1.2'; 'TLSv1.3', wenn alle Clients es können. Alte Clients vorher prüfen."
+    },
+    {
+      "id": "hba.errors",
+      "title": "pg_hba.conf enthält keine fehlerhaften Zeilen",
+      "category": "Netzwerk und TLS",
+      "severity": "high",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'Zeile ' || line_number AS object, error AS detail FROM pg_hba_file_rules WHERE error IS NOT NULL"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Eine fehlerhafte Zeile verhindert das Neuladen der Datei. Die nächste Änderung greift dann nicht, ohne dass es auffällt.",
+      "remediation": "Zeile korrigieren und vor dem Neuladen erneut über pg_hba_file_rules prüfen."
+    },
+    {
+      "id": "hba.host_without_tls",
+      "title": "Netzwerkzugänge in pg_hba.conf verlangen TLS",
+      "category": "Netzwerk und TLS",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || ' ' || auth_method AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND type IN ('host', 'hostnossl') AND auth_method <> 'reject' AND NOT (coalesce(address, '') ~ '^127\\.' OR address IN ('::1', 'samehost', 'localhost'))"
+      },
+      "fix": { "type": "hba", "from": ["host", "hostnossl"], "to": "hostssl", "kind": "type", "requires": ["ssl_on"] },
+      "automation": "confirm",
+      "rationale": "Eine host-Zeile erlaubt auch unverschlüsselte Verbindungen. Ob TLS genutzt wird, entscheidet dann der Client.",
+      "remediation": "host durch hostssl ersetzen; als letzte Zeile 'hostnossl all all all reject' ergänzen."
+    },
+    {
+      "id": "auth.password_encryption",
+      "title": "Neue Passwörter werden als SCRAM-SHA-256 gespeichert",
+      "category": "Authentifizierung",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "password_encryption", "op": "eq", "value": "scram-sha-256" },
+      "fix": { "type": "conf", "settings": { "password_encryption": "scram-sha-256" } },
+      "automation": "auto",
+      "rationale": "MD5 ist abgekündigt; ein MD5-Hash genügt für die Anmeldung, ohne das Passwort zu kennen.",
+      "remediation": "password_encryption = 'scram-sha-256'. Wirkt nur auf neu gesetzte Passwörter."
+    },
+    {
+      "id": "auth.md5_passwords",
+      "title": "Keine Rolle hat noch ein MD5-Passwort",
+      "category": "Authentifizierung",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "superuser",
+      "check": {
+        "type": "query",
+        "sql": "SELECT rolname AS object, 'Passwort als MD5-Hash gespeichert' AS detail FROM pg_authid WHERE rolpassword LIKE 'md5%' ORDER BY rolname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein vorhandener MD5-Hash bleibt bestehen, bis das Passwort neu gesetzt wird.",
+      "remediation": "Passwort je Rolle neu setzen (psql: \\password <rolle>), nachdem password_encryption auf scram-sha-256 steht."
+    },
+    {
+      "id": "auth.weak_passwords",
+      "title": "Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe)",
+      "category": "Authentifizierung",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "superuser",
+      "legal_notice": true,
+      "check": { "type": "weak_passwords" },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Die gespeicherten SCRAM- und MD5-Werte aus pg_authid werden für eine kleine, fest umrissene Liste naheliegender Kandidaten (Rollenname, postgres, password, admin, Rollenname mit Jahreszahl u. ä.) nachgerechnet, auf Wunsch ergänzt um eine vom Betreiber bereitgestellte Liste betriebsspezifischer Begriffe (höchstens 100 Einträge, --extra-candidates). Es gibt keine Anmeldeversuche und keine Last am Server; ausgegeben wird nur die Rolle, nie das Passwort. Ein Lauf ohne Befund heißt nicht, dass die Passwörter stark sind — nur, dass sie nicht in dieser kurzen Liste stehen.",
+      "remediation": "Passwort der Rolle neu setzen (psql: \\password <rolle>) und für Anwendungen ein langes, zufälliges Geheimnis verwenden. passwordcheck bzw. credcheck verhindert triviale Passwörter künftig (Regel auth.password_policy)."
+    },
+    {
+      "id": "hba.trust",
+      "title": "Keine Anmeldung ohne Passwort (trust)",
+      "category": "Authentifizierung",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'trust'"
+      },
+      "fix": { "type": "hba", "from": "trust", "to": "scram-sha-256", "kind": "method", "requires": ["scram_passwords"] },
+      "automation": "confirm",
+      "rationale": "trust lässt jeden, der die Verbindung herstellen kann, ohne Passwort als jede in der Zeile zugelassene Rolle ein — bei 'all' auch als Superuser.",
+      "remediation": "Lokal peer (Linux) bzw. scram-sha-256 verwenden. Vor dem Neuladen sicherstellen, dass ein Zugang erhalten bleibt."
+    },
+    {
+      "id": "hba.cleartext_password",
+      "title": "Kein Passwort im Klartext (Methode password)",
+      "category": "Authentifizierung",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'password'"
+      },
+      "fix": { "type": "hba", "from": "password", "to": "scram-sha-256", "kind": "method", "requires": ["scram_passwords"] },
+      "automation": "confirm",
+      "rationale": "Die Methode password überträgt das Passwort im Klartext.",
+      "remediation": "Methode auf scram-sha-256 umstellen."
+    },
+    {
+      "id": "hba.md5_method",
+      "title": "pg_hba.conf nutzt scram-sha-256 statt md5",
+      "category": "Authentifizierung",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'md5'"
+      },
+      "fix": { "type": "hba", "from": "md5", "to": "scram-sha-256", "kind": "method", "requires": ["scram_passwords"] },
+      "automation": "confirm",
+      "rationale": "Mit md5 in pg_hba.conf melden sich Rollen mit MD5-Hash weiter per MD5 an; SCRAM wird nicht erzwungen.",
+      "remediation": "Erst alle Passwörter auf SCRAM umstellen (auth.md5_passwords), dann md5 durch scram-sha-256 ersetzen."
+    },
+    {
+      "id": "hba.open_to_all",
+      "title": "Kein Netzwerkzugang für alle Adressen",
+      "category": "Authentifizierung",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') || ' ' || auth_method AS detail FROM pg_hba_file_rules WHERE error IS NULL AND type LIKE 'host%' AND auth_method <> 'reject' AND (address = 'all' OR (address IN ('0.0.0.0', '::') AND netmask IN ('0.0.0.0', '::')))"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein Eintrag für alle Adressen öffnet die Anmeldung für jedes Netz, das den Port erreicht.",
+      "remediation": "Auf die tatsächlichen Netze der Anwendungsserver und Administratoren einschränken."
+    },
+    {
+      "id": "hba.superuser_remote",
+      "title": "Superuser können sich nicht über das Netz anmelden",
+      "category": "Authentifizierung",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "WITH su AS (SELECT oid, rolname FROM pg_roles WHERE rolsuper AND rolcanlogin), covers AS (SELECT h.line_number, h.type, h.auth_method, h.database, h.address, h.netmask, h.user_name, su.rolname AS superuser FROM pg_hba_file_rules h CROSS JOIN su WHERE h.error IS NULL AND h.type LIKE 'host%' AND NOT (coalesce(h.address, '') ~ '^127\\.' OR h.address IN ('::1', 'samehost', 'localhost')) AND EXISTS (SELECT 1 FROM unnest(h.user_name) AS u WHERE u = 'all' OR u = su.rolname OR (left(u, 1) = '+' AND EXISTS (SELECT 1 FROM pg_roles g WHERE g.rolname = substr(u, 2) AND pg_has_role(su.oid, g.oid, 'MEMBER'))))) SELECT 'Zeile ' || c.line_number AS object, c.type || ' ' || array_to_string(c.user_name, ',') || ' ' || coalesce(c.address, '') || ' — Superuser ' || string_agg(c.superuser, ', ' ORDER BY c.superuser) AS detail FROM covers c WHERE c.auth_method <> 'reject' AND NOT EXISTS (SELECT 1 FROM covers r WHERE r.superuser = c.superuser AND r.auth_method = 'reject' AND (r.type = 'host' OR r.type = c.type) AND r.line_number < c.line_number AND (r.address = 'all' OR (r.address IN ('0.0.0.0', '::') AND r.netmask IN ('0.0.0.0', '::'))) AND ('all' = ANY (r.database) OR r.database @> c.database)) GROUP BY c.line_number, c.type, c.user_name, c.address ORDER BY c.line_number"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein über das Netz erreichbarer Superuser macht aus einem gestohlenen Passwort die volle Kontrolle über Server und Betriebssystemkonto. Gruppen (+rolle) werden aufgelöst; eine vorangestellte reject-Zeile für alle Adressen hebt den Befund auf. Prüft eine einzelne pg_hba.conf ohne Include-Reihenfolge.",
+      "remediation": "Superuser nur lokal zulassen; davor eine reject-Zeile für Superuser über das Netz setzen. 'all' durch konkrete Rollen ersetzen."
+    },
+    {
+      "id": "auth.authentication_timeout",
+      "title": "Anmeldevorgang ist zeitlich begrenzt (höchstens 60 Sekunden)",
+      "category": "Authentifizierung",
+      "severity": "low",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "authentication_timeout", "op": "lte", "value": 60 },
+      "fix": { "type": "conf", "settings": { "authentication_timeout": "30s" } },
+      "automation": "auto",
+      "rationale": "Halb offene Anmeldungen belegen Verbindungsplätze.",
+      "remediation": "authentication_timeout = '30s'."
+    },
+    {
+      "id": "auth.auth_delay",
+      "title": "Bremse nach Fehlanmeldung (auth_delay) geladen",
+      "category": "Authentifizierung",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'auth_delay' AS object, CASE WHEN current_setting('shared_preload_libraries') !~* '(^|[ ,/])auth_delay($|[ ,])' THEN 'auth_delay nicht geladen' ELSE 'auth_delay.milliseconds = 0, keine Verzögerung' END AS detail WHERE current_setting('shared_preload_libraries') !~* '(^|[ ,/])auth_delay($|[ ,])' OR coalesce(nullif(current_setting('auth_delay.milliseconds', true), ''), '0')::int = 0"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ohne Verzögerung lassen sich Passwörter in hoher Frequenz durchprobieren.",
+      "remediation": "auth_delay in shared_preload_libraries aufnehmen, auth_delay.milliseconds setzen (Neustart erforderlich)."
+    },
+    {
+      "id": "auth.password_policy",
+      "title": "Passwortrichtlinie aktiv (passwordcheck oder credcheck)",
+      "category": "Authentifizierung",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'shared_preload_libraries' AS object, 'weder passwordcheck noch credcheck geladen' AS detail WHERE (current_setting('shared_preload_libraries') || ',' || current_setting('session_preload_libraries')) !~* '(^|[ ,/])(passwordcheck|credcheck)($|[ ,])'"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ohne Prüfung akzeptiert PostgreSQL jedes Passwort, auch ein triviales wie den Rollennamen. Geprüft wird nur, ob ein Modul in shared_preload_libraries oder session_preload_libraries geladen ist, nicht seine Einstellungen.",
+      "remediation": "passwordcheck (contrib) oder credcheck laden. Gilt nur für Passwörter, die über SQL gesetzt werden."
+    },
+    {
+      "id": "roles.extra_superusers",
+      "title": "Keine weiteren Superuser mit Anmelderecht",
+      "category": "Rollen und Rechte",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT rolname AS object, 'Superuser mit LOGIN' AS detail FROM pg_roles WHERE rolsuper AND rolcanlogin AND oid <> 10 ORDER BY rolname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Jeder Superuser umgeht alle Rechte, Row-Level Security und kann Betriebssystembefehle ausführen.",
+      "remediation": "Aufgaben über vordefinierte Rollen abbilden (pg_monitor, pg_read_all_data …; pg_maintain ab PostgreSQL 17), Superuser-Recht entziehen."
+    },
+    {
+      "id": "roles.server_file_access",
+      "title": "Kein Nicht-Superuser hat Zugriff auf Serverdateien oder -programme",
+      "category": "Rollen und Rechte",
+      "severity": "high",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT r.rolname AS object, 'Mitglied (auch über Gruppen) von ' || g.rolname AS detail FROM pg_roles r CROSS JOIN pg_roles g WHERE g.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files') AND r.oid <> g.oid AND NOT r.rolsuper AND r.rolname !~ '^pg_' AND pg_has_role(r.oid, g.oid, 'MEMBER') ORDER BY 1, 2"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Diese Rollen erlauben COPY … PROGRAM bzw. Dateizugriff mit den Rechten des Dienstkontos — praktisch Superuser.",
+      "remediation": "Mitgliedschaft entziehen; Datenimport über clientseitiges \\copy abwickeln."
+    },
+    {
+      "id": "roles.bypassrls",
+      "title": "Row-Level Security umgehen nur Superuser",
+      "category": "Rollen und Rechte",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT rolname AS object, 'BYPASSRLS' AS detail FROM pg_roles WHERE rolbypassrls AND NOT rolsuper ORDER BY rolname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "BYPASSRLS hebelt jede Policy aus; das Recht fällt bei Prüfungen der Policies leicht durch.",
+      "remediation": "BYPASSRLS nur für Sicherungs- oder Wartungsrollen, die es nachweislich brauchen."
+    },
+    {
+      "id": "roles.createrole",
+      "title": "CREATEROLE nur für ausgewiesene Verwaltungsrollen",
+      "category": "Rollen und Rechte",
+      "severity": "low",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT rolname AS object, 'CREATEROLE' AS detail FROM pg_roles WHERE rolcreaterole AND NOT rolsuper ORDER BY rolname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "CREATEROLE erlaubt das Anlegen und Verwalten anderer Rollen; vor Version 16 reichte es fast an Superuser heran.",
+      "remediation": "Liste mit dem Rollenkonzept abgleichen; createrole_self_grant bewusst setzen."
+    },
+    {
+      "id": "roles.allow_alter_system",
+      "title": "ALTER SYSTEM ist gesperrt",
+      "category": "Rollen und Rechte",
+      "severity": "low",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "min_version": 170000,
+      "check": { "type": "setting", "name": "allow_alter_system", "op": "eq", "value": "off" },
+      "fix": { "type": "conf", "settings": { "allow_alter_system": "off" } },
+      "automation": "confirm",
+      "rationale": "Wird die Konfiguration als Code verwaltet, überschreibt ALTER SYSTEM sie unbemerkt über postgresql.auto.conf.",
+      "remediation": "allow_alter_system = off, sobald die Konfiguration versioniert ausgerollt wird. Den Parameter gibt es ab Version 17; in 14 bis 16 wird die Regel übersprungen. Kein Schutz gegen böswillige Superuser."
+    },
+    {
+      "id": "db.public_schema_create",
+      "title": "Niemand kann im Schema public ohne Freigabe Objekte anlegen",
+      "category": "Rollen und Rechte",
+      "severity": "high",
+      "goal": "Integrität",
+      "scope": "database",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() || '.public' AS object, 'PUBLIC hat CREATE' AS detail, 'REVOKE CREATE ON SCHEMA public FROM PUBLIC;' AS fix_sql, 'GRANT CREATE ON SCHEMA public TO PUBLIC;' AS rollback_sql FROM pg_namespace WHERE nspname = 'public' AND has_schema_privilege('public', 'public', 'CREATE')"
+      },
+      "fix": { "type": "sql" },
+      "automation": "confirm",
+      "rationale": "Wer in einem Schema im search_path anderer Rollen Objekte anlegen kann, kann deren Abfragen umlenken (CVE-2018-1058). Seit Version 15 Standard, aber nicht in aktualisierten Altbeständen.",
+      "remediation": "REVOKE CREATE ON SCHEMA public FROM PUBLIC; Anwendungs- und Migrationsrollen, die in public anlegen, vorher gezielt berechtigen — sonst brechen Deployments."
+    },
+    {
+      "id": "db.public_temp",
+      "title": "Temporäre Tabellen nur für berechtigte Rollen",
+      "category": "Rollen und Rechte",
+      "severity": "low",
+      "goal": "Integrität",
+      "scope": "database",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() AS object, 'PUBLIC hat TEMPORARY' AS detail, format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC;', current_database()) AS fix_sql, format('GRANT TEMPORARY ON DATABASE %I TO PUBLIC;', current_database()) AS rollback_sql WHERE has_database_privilege('public', current_database(), 'TEMPORARY')"
+      },
+      "fix": { "type": "sql" },
+      "automation": "confirm",
+      "rationale": "Das temporäre Schema wird für Tabellen und Typen vor allen anderen durchsucht; temporäre Tabellen können so gleichnamige Tabellen in Funktionen ohne festen search_path überdecken. Außerdem belegen sie Platz. Die Regel schlägt auf jeder Standardinstallation an und ist deshalb niedrig eingestuft.",
+      "remediation": "Recht entziehen und den Anwendungsrollen gezielt geben, die temporäre Tabellen brauchen."
+    },
+    {
+      "id": "db.public_connect",
+      "title": "Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT)",
+      "category": "Rollen und Rechte",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT d.datname AS object, 'PUBLIC darf sich verbinden (CONNECT)' AS detail, format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC;', d.datname) AS fix_sql, format('GRANT CONNECT ON DATABASE %I TO PUBLIC;', d.datname) AS rollback_sql FROM pg_database d WHERE d.datallowconn AND NOT d.datistemplate AND EXISTS (SELECT 1 FROM aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a WHERE a.grantee = 0 AND a.privilege_type = 'CONNECT') ORDER BY d.datname"
+      },
+      "fix": { "type": "sql" },
+      "automation": "confirm",
+      "rationale": "Standardmäßig darf jede Rolle, die sich am Server anmelden kann, sich mit jeder Datenbank verbinden — pg_hba.conf entscheidet nur über den Weg, nicht über die Datenbank, wenn sie 'all' nennt. Wer mehrere Anwendungen oder Mandanten auf einem Server betreibt, trennt sie erst durch den Entzug von CONNECT. Der Name der Datenbank bleibt trotzdem in den Systemkatalogen für alle sichtbar; nur der Zugang ist dann gesperrt.",
+      "remediation": "REVOKE CONNECT ON DATABASE <db> FROM PUBLIC und CONNECT gezielt den Rollen geben, die die Datenbank brauchen (GRANT CONNECT ON DATABASE <db> TO <rolle>) — vorher, sonst verlieren Anwendungen den Zugang. Die Datenbank postgres und Wartungswerkzeuge (Monitoring, Backup) nicht vergessen."
+    },
+    {
+      "id": "db.catalog_visibility",
+      "title": "Datenbank- und Rollennamen sind nicht für alle Rollen lesbar",
+      "category": "Rollen und Rechte",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "database",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() AS object, 'PUBLIC darf lesen: ' || string_agg(c.relname::text, ', ' ORDER BY c.relname) AS detail, 'REVOKE SELECT ON TABLE ' || string_agg('pg_catalog.' || quote_ident(c.relname::text), ', ' ORDER BY c.relname) || ' FROM PUBLIC;' AS fix_sql, 'GRANT SELECT ON TABLE ' || string_agg('pg_catalog.' || quote_ident(c.relname::text), ', ' ORDER BY c.relname) || ' TO PUBLIC;' AS rollback_sql FROM pg_class c WHERE c.relnamespace = 'pg_catalog'::regnamespace AND c.relname IN ('pg_database', 'pg_roles', 'pg_user', 'pg_group', 'pg_auth_members', 'pg_stat_database', 'pg_stat_database_conflicts', 'pg_shdescription') AND has_table_privilege('public', c.oid, 'SELECT') HAVING count(*) > 0"
+      },
+      "fix": { "type": "sql" },
+      "automation": "confirm",
+      "rationale": "Standardmäßig kann jede angemeldete Rolle alle Datenbank- und Rollennamen lesen (psql \\l und \\du, GUI-Werkzeuge), auch die von Datenbanken, in die sie sich nicht verbinden darf. Wer mehrere Anwendungen oder Mandanten auf einem Server betreibt, gibt so Namen preis, die Kundennamen oder Personenkennungen sein können. Der Entzug nimmt diese bequemen Wege; er ist keine Geheimhaltung: Rollennamen lassen sich über ihre Kennung (oid::regrole) weiter ermitteln, und die Fehlermeldung beim Verbindungsversuch verrät, ob eine Datenbank existiert. pg_stat_activity zeigt weiter Datenbank- und Rollennamen laufender Sitzungen; Replikationssichten (pg_replication_slots) gehören nicht zur Regel und wurden nicht untersucht. Eine Zeilenfilterung gibt es im Katalog nicht (kein Row-Level-Security auf Systemkatalogen); wer Mandanten wirklich trennen muss, nimmt getrennte Cluster.",
+      "remediation": "Die Berechtigung steht in jeder Datenbank einzeln (auch in template1, damit neue Datenbanken sie erben; template0 prüft das Werkzeug nicht — Datenbanken, die mit TEMPLATE template0 angelegt werden, erscheinen später als Befund und brauchen den Entzug selbst). Vorher allen Rollen und Anwendungen, die die Kataloge lesen, gezielt SELECT geben: Administrationsrollen und Werkzeuge, die Listen anzeigen, Monitoring (etwa Exporter auf pg_stat_database), Treiber mit Metadatenabfragen, die Rolle von pg-harden und die Sicherungsrolle (pg_dump braucht pg_database und pg_roles); in einer Testumgebung erproben. Rollen, die das Recht über eine eigene Vergabe oder Rollenmitgliedschaft haben, sind vom Entzug an PUBLIC nicht betroffen. Danach schlagen \\l, \\du und GUI-Baumansichten für alle anderen mit „permission denied“ fehl. Für Anwender, die nur ihre eigenen Datenbanken sehen sollen, eine Ansicht des Administrators anbieten, die mit has_database_privilege(datname, 'CONNECT') filtert (README). Der Entzug steht im Dump (pg_dump führt ihn mit) und blieb in Tests bei einer Wiederherstellung mit pg_dumpall und bei pg_upgrade (17 nach 18, 14 nach 19rc1) erhalten; nach jedem Upgrade oder jeder Wiederherstellung die Regel erneut prüfen. Der Rückweg (apply rollback) stellt nur die Datenbanken wieder her, die beim Fix geprüft wurden — später aus template1 angelegte erben den Entzug und brauchen das GRANT selbst."
+    },
+    {
+      "id": "code.secdef_search_path",
+      "title": "SECURITY DEFINER-Funktionen haben einen festen search_path",
+      "category": "Code in der Datenbank",
+      "severity": "high",
+      "goal": "Integrität",
+      "scope": "database",
+      "check": {
+        "type": "query",
+        "sql": "SELECT format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) AS object, coalesce('search_path ' || sp.val || ' endet nicht auf pg_temp', 'SECURITY DEFINER ohne search_path') AS detail, format('ALTER ROUTINE %I.%I(%s) SET search_path = %s, pg_temp;', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), CASE WHEN sp.val IS NULL THEN quote_ident(n.nspname) || CASE WHEN n.nspname <> 'public' THEN ', public' ELSE '' END ELSE coalesce((SELECT string_agg(trim(e.part), ', ' ORDER BY e.pos) FROM unnest(string_to_array(sp.val, ',')) WITH ORDINALITY AS e(part, pos) WHERE trim(both ' \"' FROM e.part) <> 'pg_temp'), quote_ident(n.nspname)) END) AS fix_sql, CASE WHEN sp.val IS NULL THEN format('ALTER ROUTINE %I.%I(%s) RESET search_path;', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)) ELSE format('ALTER ROUTINE %I.%I(%s) SET search_path = %s;', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), sp.val) END AS rollback_sql FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace LEFT JOIN LATERAL (SELECT substr(c, 13) AS val FROM unnest(p.proconfig) AS c WHERE c LIKE 'search_path=%' LIMIT 1) sp ON true WHERE p.prosecdef AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND (sp.val IS NULL OR trim(both ' \"' FROM split_part(sp.val, ',', array_length(string_to_array(sp.val, ','), 1))) <> 'pg_temp') AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e') ORDER BY 1"
+      },
+      "fix": { "type": "sql" },
+      "automation": "confirm",
+      "rationale": "Eine Funktion mit den Rechten ihres Eigentümers, die Namen über einen beschreibbaren search_path auflöst, lässt sich mit einem untergeschobenen Objekt kapern. pg_temp muss ausdrücklich am Ende stehen, sonst wird es zuerst durchsucht.",
+      "remediation": "pg_temp ans Ende setzen. Ein bestehender search_path bleibt erhalten; ohne Einstellung schlägt der Plan das eigene Schema und public vor. Funktion danach testen: unqualifizierte Namen aus weiteren Schemata müssen qualifiziert oder aufgenommen werden (42P01 zur Laufzeit). Beschreibbare Schemata (public!) gehören nur in den search_path, wenn niemand Unberechtigtes dort anlegen kann. Der Rückweg stellt den vorherigen Wert wieder her."
+    },
+    {
+      "id": "code.untrusted_languages",
+      "title": "Keine untrusted Sprachen installiert",
+      "category": "Code in der Datenbank",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "database",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() || '.' || lanname AS object, 'untrusted Sprache' AS detail FROM pg_language WHERE lanispl AND NOT lanpltrusted ORDER BY lanname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Funktionen in untrusted Sprachen (plpython3u, plperlu) laufen mit den Rechten des Dienstkontos.",
+      "remediation": "Nur installieren, wo nötig; Eigentum an solchen Funktionen auf eine eigene Rolle beschränken."
+    },
+    {
+      "id": "code.lo_compat_privileges",
+      "title": "Large Objects unterliegen der Rechteprüfung",
+      "category": "Code in der Datenbank",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "lo_compat_privileges", "op": "eq", "value": "off" },
+      "fix": { "type": "conf", "settings": { "lo_compat_privileges": "off" } },
+      "automation": "confirm",
+      "rationale": "Mit on darf jede Rolle jedes Large Object lesen und ändern.",
+      "remediation": "lo_compat_privileges = off; vorher Rechte für Anwendungen setzen, die fremde Large Objects lesen (GRANT SELECT ON LARGE OBJECT)."
+    },
+    {
+      "id": "code.extensions",
+      "title": "Installierte Extensions (Bestandsliste)",
+      "category": "Code in der Datenbank",
+      "severity": "info",
+      "goal": "Integrität",
+      "scope": "database",
+      "kind": "inventory",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() || '.' || extname AS object, 'Version ' || extversion AS detail FROM pg_extension WHERE extname <> 'plpgsql' ORDER BY extname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Jede Extension bringt Code mit Serverrechten. Die Liste ist Grundlage für die Prüfung von Herkunft und Bedarf.",
+      "remediation": "Nicht benötigte Extensions entfernen, Herkunft der Pakete prüfen (PGDG)."
+    },
+    {
+      "id": "code.preload_libraries",
+      "title": "Vorab geladene Bibliotheken (Bestandsliste)",
+      "category": "Code in der Datenbank",
+      "severity": "info",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "kind": "inventory",
+      "check": {
+        "type": "query",
+        "sql": "SELECT name AS object, setting AS detail FROM pg_settings WHERE name IN ('shared_preload_libraries', 'session_preload_libraries', 'local_preload_libraries') AND setting <> ''"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Vorab geladene Bibliotheken laufen in jedem Prozess.",
+      "remediation": "Liste mit dem Bedarf abgleichen."
+    },
+    {
+      "id": "log.collector",
+      "title": "Protokolle werden in Dateien oder an syslog geschrieben",
+      "category": "Protokollierung",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'logging_collector' AS object, 'weder logging_collector noch syslog/eventlog' AS detail WHERE current_setting('logging_collector') = 'off' AND current_setting('log_destination') !~ '(syslog|eventlog)'"
+      },
+      "fix": { "type": "conf", "settings": { "logging_collector": "on" } },
+      "automation": "confirm",
+      "rationale": "Ohne Collector oder syslog hängt die Protokollierung davon ab, wohin stderr umgeleitet wird; Rotation und Aufbewahrung fehlen.",
+      "remediation": "logging_collector = on (Neustart erforderlich) oder an syslog/journald übergeben."
+    },
+    {
+      "id": "log.connections",
+      "title": "Anmeldungen werden protokolliert",
+      "category": "Protokollierung",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'log_connections' AS object, 'aus' AS detail WHERE lower(trim(current_setting('log_connections'))) IN ('off', '', 'false', 'no', '0', 'f', 'n')"
+      },
+      "fix": { "type": "conf", "settings": { "log_connections": "on" } },
+      "automation": "auto",
+      "rationale": "Ohne Anmeldeprotokoll lässt sich ein Zugriff nicht einer Person oder Quelle zuordnen.",
+      "remediation": "log_connections = on (seit Version 18 auch gestuft, z. B. 'receipt,authentication,authorization')."
+    },
+    {
+      "id": "log.disconnections",
+      "title": "Sitzungsende wird protokolliert",
+      "category": "Protokollierung",
+      "severity": "low",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "log_disconnections", "op": "eq", "value": "on" },
+      "fix": { "type": "conf", "settings": { "log_disconnections": "on" } },
+      "automation": "auto",
+      "rationale": "Das Sitzungsende mit Dauer vervollständigt die Spur einer Anmeldung.",
+      "remediation": "log_disconnections = on."
+    },
+    {
+      "id": "log.line_prefix",
+      "title": "Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle",
+      "category": "Protokollierung",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'log_line_prefix' AS object, current_setting('log_line_prefix') AS detail FROM (SELECT replace(current_setting('log_line_prefix'), '%%', '') AS p) x WHERE NOT (p ~ '%[mtn]' AND p ~ '%u' AND p ~ '%d' AND p ~ '%[hr]')"
+      },
+      "fix": { "type": "conf", "settings": { "log_line_prefix": "%m [%p] %q%u@%d from %r (%a) " } },
+      "automation": "confirm",
+      "rationale": "Ohne Benutzer, Datenbank und Quelladresse ist eine Protokollzeile im Vorfall kaum verwertbar.",
+      "remediation": "log_line_prefix um %m, %u, %d und %r ergänzen. Auswertungswerkzeuge (pgBadger, SIEM-Parser) anpassen."
+    },
+    {
+      "id": "log.statement_ddl",
+      "title": "Strukturänderungen werden protokolliert",
+      "category": "Protokollierung",
+      "severity": "low",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "log_statement", "op": "in", "value": ["ddl", "mod", "all"] },
+      "fix": { "type": "conf", "settings": { "log_statement": "ddl" } },
+      "automation": "confirm",
+      "rationale": "Angelegte, geänderte und gelöschte Objekte und Rollen sollen nachvollziehbar sein. Achtung: ALTER ROLE … PASSWORD landet dann im Klartext im Log.",
+      "remediation": "log_statement = 'ddl'; Passwörter nur über \\password bzw. vorab gehashte Werte setzen."
+    },
+    {
+      "id": "log.pgaudit",
+      "title": "pgAudit ist geladen",
+      "category": "Protokollierung",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'shared_preload_libraries' AS object, 'pgaudit nicht geladen' AS detail WHERE current_setting('shared_preload_libraries') !~* '(^|[ ,/])pgaudit($|[ ,])'"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Die Bordmittel protokollieren Anweisungstexte, aber nicht zuverlässig, auf welche Tabellen eine Anweisung tatsächlich zugreift (Views, Funktionen, dynamisches SQL). Das leistet pgAudit mit Session- und Object-Audit.",
+      "remediation": "pgaudit installieren, in shared_preload_libraries aufnehmen (Neustart), pgaudit.log bzw. Objekt-Audit einrichten."
+    },
+    {
+      "id": "log.parameter_length",
+      "title": "Parameterwerte werden nicht vollständig protokolliert",
+      "category": "Protokollierung",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "min_version": 130000,
+      "check": { "type": "setting", "name": "log_parameter_max_length", "op": "neq", "value": "-1" },
+      "fix": { "type": "conf", "settings": { "log_parameter_max_length": "0" } },
+      "automation": "confirm",
+      "rationale": "Bind-Parameter können personenbezogene Daten oder Geheimnisse enthalten und landen sonst vollständig im Log.",
+      "remediation": "log_parameter_max_length = 0 (keine Werte) oder eine kleine Länge."
+    },
+    {
+      "id": "log.debug_print",
+      "title": "Debug-Ausgaben von Parser und Planer sind aus",
+      "category": "Protokollierung",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT name AS object, 'on' AS detail FROM pg_settings WHERE name IN ('debug_print_parse', 'debug_print_rewritten', 'debug_print_plan') AND setting = 'on'"
+      },
+      "fix": { "type": "conf", "settings": { "debug_print_parse": "off", "debug_print_rewritten": "off", "debug_print_plan": "off" } },
+      "automation": "auto",
+      "rationale": "Die Debug-Ausgaben schreiben vollständige Abfragebäume samt Konstanten ins Log.",
+      "remediation": "Alle drei auf off."
+    },
+    {
+      "id": "log.file_mode",
+      "title": "Protokolldateien sind nur für das Dienstkonto lesbar",
+      "category": "Protokollierung",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'log_file_mode' AS object, 'ist ' || current_setting('log_file_mode') || ', erwartet 0600 oder 0400' AS detail WHERE current_setting('logging_collector') = 'on' AND current_setting('log_file_mode') NOT IN ('0400', '0600') AND version() !~* '(windows|visual c\\+\\+|mingw)'"
+      },
+      "fix": { "type": "conf", "settings": { "log_file_mode": "0600" } },
+      "automation": "confirm",
+      "rationale": "Protokolle enthalten Abfragetexte und Fehlermeldungen mit Daten. Unter Windows ignoriert PostgreSQL diesen Parameter; dort gelten die NTFS-Rechte des Log-Verzeichnisses, die die Regel nicht prüft.",
+      "remediation": "log_file_mode = 0600. Lesezugriff für die Auswertung über eine Gruppe (0640) meldet die Regel weiterhin — dann den Befund bewusst bewerten."
+    },
+    {
+      "id": "log.directory_outside_pgdata",
+      "title": "Protokolle liegen außerhalb des Datenverzeichnisses",
+      "category": "Protokollierung",
+      "severity": "low",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "requires": "settings",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'log_directory' AS object, current_setting('log_directory') AS detail FROM (SELECT CASE WHEN version() ~* '(windows|visual c\\+\\+|mingw)' THEN lower(replace(current_setting('log_directory'), '\\', '/')) ELSE replace(current_setting('log_directory'), '\\', '/') END AS ld, CASE WHEN version() ~* '(windows|visual c\\+\\+|mingw)' THEN lower(rtrim(replace(current_setting('data_directory'), '\\', '/'), '/')) ELSE rtrim(replace(current_setting('data_directory'), '\\', '/'), '/') END AS dd) x WHERE current_setting('logging_collector') = 'on' AND (ld !~ '^(/|[A-Za-z]:)' OR ld = dd OR left(ld, length(dd) + 1) = dd || '/')"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Volle Protokolle im Datenverzeichnis verdrängen das WAL; der Server stoppt dann für alle. Bei voller Log-Partition läuft PostgreSQL selbst weiter, meldet den Schreibfehler einmal auf stderr und verliert die Meldungen danach.",
+      "remediation": "log_directory auf eigenes Verzeichnis bzw. eigene Partition; Füllstand und die Meldung 'could not write to log file' im Dienst-Protokoll (stderr/journald) überwachen; Audit-Logs an ein SIEM übertragen."
+    },
+    {
+      "id": "avail.temp_file_limit",
+      "title": "Temporäre Dateien je Prozess sind begrenzt",
+      "category": "Verfügbarkeit",
+      "severity": "medium",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "temp_file_limit", "op": "neq", "value": "-1" },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Jede angemeldete Rolle kann mit einer einzigen Abfrage die Platte füllen und damit den Server für alle stoppen.",
+      "remediation": "temp_file_limit passend zur freien Kapazität setzen; gilt je Prozess, nicht in Summe."
+    },
+    {
+      "id": "avail.slot_wal_keep",
+      "title": "Replikations-Slots können das WAL nicht unbegrenzt festhalten",
+      "category": "Verfügbarkeit",
+      "severity": "medium",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "min_version": 130000,
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'max_slot_wal_keep_size' AS object, 'unbegrenzt bei ' || count(*) || ' Slot(s)' AS detail FROM pg_replication_slots HAVING count(*) > 0 AND current_setting('max_slot_wal_keep_size') = '-1'"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein verwaister Slot hält WAL fest, bis die Platte voll ist.",
+      "remediation": "max_slot_wal_keep_size setzen; der Slot wird dann ungültig statt den Server zu stoppen."
+    },
+    {
+      "id": "avail.inactive_slots",
+      "title": "Keine inaktiven Replikations-Slots",
+      "category": "Verfügbarkeit",
+      "severity": "medium",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT slot_name AS object, slot_type || ', inaktiv' AS detail FROM pg_replication_slots WHERE NOT active ORDER BY slot_name"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein inaktiver Slot hält WAL fest; häufigste Ursache für ein vollgelaufenes WAL-Verzeichnis.",
+      "remediation": "Klären, ob der Abnehmer noch existiert; sonst pg_drop_replication_slot()."
+    },
+    {
+      "id": "avail.archive_enabled",
+      "title": "WAL-Archivierung ist eingeschaltet",
+      "category": "Verfügbarkeit",
+      "severity": "medium",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "archive_mode", "op": "in", "value": ["on", "always"] },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ohne WAL-Archiv ist keine Wiederherstellung auf einen Zeitpunkt (PITR) möglich; nach einem Fehler oder Angriff bleibt nur die letzte Vollsicherung.",
+      "remediation": "Archivierung mit einem Sicherungswerkzeug einrichten (pgBackRest, Barman oder archive_command/archive_library); archive_mode = on erfordert einen Neustart. Bewusst ohne Archiv betriebene Instanzen dokumentieren."
+    },
+    {
+      "id": "avail.archiver_failing",
+      "title": "WAL-Archivierung läuft fehlerfrei (wenn eingeschaltet)",
+      "category": "Verfügbarkeit",
+      "severity": "high",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'pg_stat_archiver' AS object, 'letzter Fehler ' || last_failed_time || ' (' || coalesce(last_failed_wal, '?') || '), letzter Erfolg ' || coalesce(last_archived_time::text, 'nie') AS detail FROM pg_stat_archiver WHERE current_setting('archive_mode') <> 'off' AND last_failed_time IS NOT NULL AND (last_archived_time IS NULL OR last_failed_time > last_archived_time)"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Scheitert die Archivierung, bleibt WAL liegen bis die Platte voll ist, und die Wiederherstellung auf einen Zeitpunkt ist nicht mehr möglich.",
+      "remediation": "archive_command bzw. archive_library prüfen, Fehler im Log nachsehen, Alarm auf pg_stat_archiver einrichten."
+    },
+    {
+      "id": "sess.idle_in_transaction",
+      "title": "Offen hängende Transaktionen werden beendet",
+      "category": "Verfügbarkeit",
+      "severity": "low",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "idle_in_transaction_session_timeout", "op": "gt", "value": 0 },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Eine offene, untätige Transaktion hält Sperren und verhindert das Aufräumen durch VACUUM.",
+      "remediation": "idle_in_transaction_session_timeout setzen, z. B. 10min; bei Bedarf je Rolle abweichend."
+    },
+    {
+      "id": "data.checksums",
+      "title": "Datenprüfsummen sind eingeschaltet",
+      "category": "Datenschutz und Integrität",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "data_checksums", "op": "eq", "value": "on" },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ohne Prüfsummen fällt eine stille Beschädigung von Datenseiten erst auf, wenn die Daten schon falsch gelesen wurden.",
+      "remediation": "Neu angelegte Cluster ab Version 18 haben sie standardmäßig; bestehende mit pg_checksums --enable im gestoppten Zustand."
+    }
+  ]
+}
