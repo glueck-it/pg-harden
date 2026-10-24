@@ -314,6 +314,7 @@ keine Norm- oder CIS-Texte. Zwingende gesetzliche Haftung (insbesondere für Vor
 
 ## Verwandte Projekte und Schulungen
 
+- **[Produktseite pg-harden](https://dozent.net/produkte/pg-harden)** — Überblick mit Beispielausgaben.
 - **[pg-clusterbackup](https://github.com/glueck-it/pg-clusterbackup)** — sichert jede Datenbank jedes laufenden PostgreSQL-Clusters in einem
   zeitgesteuerten Job (PHP, Bash, PowerShell).
 - **[PostgreSQL Konfigurator](https://dozent.net/produkte/postgresql-konfigurator)** — Webwerkzeug für hardwareangepasste `postgresql.conf`-Konfigurationen.

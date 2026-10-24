@@ -287,6 +287,7 @@ pseudonymization of reports, BSI identifiers, OSCAL, English output texts. See [
 
 ## Related projects and training
 
+- **[pg-harden product page](https://dozent.net/produkte/pg-harden)** (German) — overview with sample output.
 - **[pg-clusterbackup](https://github.com/glueck-it/pg-clusterbackup)** — backs up every database of every running PostgreSQL cluster in one
   scheduled job (PHP, Bash, PowerShell).
 - **[PostgreSQL Konfigurator](https://dozent.net/produkte/postgresql-konfigurator)** — a web-based tool to generate optimized, hardware-tailored
