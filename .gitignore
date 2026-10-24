@@ -24,3 +24,6 @@ extra-candidates*.txt
 .idea/
 Thumbs.db
 .DS_Store
+
+# Sample output of examples/generate.sh (fictional lab instance) is published on purpose
+!examples/output/**

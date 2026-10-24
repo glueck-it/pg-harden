@@ -80,6 +80,10 @@ php pg-harden.php check  --host=db1 --user=postgres --extra-candidates=extra-can
 php pg-harden.php rules
 ```
 
+**Genau sehen, was entsteht:** [examples/](examples/) enthält die echten Ausgaben aller Befehle gegen eine Beispielinstanz — Bericht (Text und
+HTML), Plan-Dateien, Probelauf, `apply` mit Journal, `verify`, `rollback`, `rules`, `client` und den Aussperrschutz, der eine Änderung an
+`pg_hba.conf` ablehnt.
+
 Verbindung: `--host`, `--port`, `--dbname` (Einstieg, Standard `postgres`), `--sslmode`, `--databases=a,b`.
 Ohne `--host`/`--port` gelten die libpq-Vorgaben (`PGHOST`, `PGPORT`, Socket). Für entfernte Hosts ist
 `sslmode=require` voreingestellt; `verify-full` ist vorzuziehen.

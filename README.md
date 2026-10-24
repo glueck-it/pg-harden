@@ -88,6 +88,10 @@ php pg-harden.php check  --host=db1 --user=postgres --extra-candidates=company-t
 php pg-harden.php rules
 ```
 
+**See exactly what it produces:** [examples/](examples/) contains the real output of every command against a sample instance — report
+(text and HTML), plan files, dry run, `apply` with its journal, `verify`, `rollback`, `rules`, `client`, and the lockout protection refusing a
+`pg_hba.conf` change.
+
 Connection: `--host`, `--port`, `--dbname` (entry database, default `postgres`), `--sslmode`, `--databases=a,b`. Without `--host`/`--port` the
 libpq defaults apply (`PGHOST`, `PGPORT`, socket). For remote hosts `sslmode=require` is the default; `verify-full` is preferable.
 Behind PgBouncer in transaction pooling session settings are not reliable — connect directly.

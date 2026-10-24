@@ -1,0 +1,24 @@
+pg-harden 0.3.0 apply — 127.0.0.1:5432, PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2), Benutzer postgres
+
+Parameter (Include-Datei conf.d/90-pg-harden.conf):
+  - log_connections = 'on'  [log.connections]
+  - log_disconnections = 'on'  [log.disconnections]
+  · postgresql.conf enthält kein aktives include_dir: am Ende wird "include_dir = 'conf.d'" ergänzt (Sicherung der Datei, Verzeichnis /var/lib/postgresql/18/docker/conf.d wird angelegt)
+
+SQL in Datenbank shop:
+  - REVOKE CREATE ON SCHEMA public FROM PUBLIC;  [db.public_schema_create]
+  - ALTER ROUTINE public.order_total(p_id bigint) SET search_path = public, pg_temp;  [code.secdef_search_path]
+
+Nicht ausgeführt:
+  - hba.host_without_tls: braucht Freigabe: --include-confirm=hba.host_without_tls
+  - hba.trust: braucht Freigabe: --include-confirm=hba.trust
+  - roles.allow_alter_system: braucht Freigabe: --include-confirm=roles.allow_alter_system
+  - db.public_temp: braucht Freigabe: --include-confirm=db.public_temp
+  - db.public_connect: braucht Freigabe: --include-confirm=db.public_connect
+  - db.catalog_visibility: braucht Freigabe: --include-confirm=db.catalog_visibility
+  - log.collector: braucht Freigabe: --include-confirm=log.collector
+  - log.line_prefix: braucht Freigabe: --include-confirm=log.line_prefix
+  - log.statement_ddl: braucht Freigabe: --include-confirm=log.statement_ddl
+  - log.parameter_length: braucht Freigabe: --include-confirm=log.parameter_length
+
+Trockenlauf — nichts geändert. Ausführen: --execute --dir=<NEUES_VERZEICHNIS> (Sicherungen und Journal).

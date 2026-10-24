@@ -1,0 +1,8 @@
+  [OK] 3 Datei(en) zurückgespielt
+  [OK] Konfiguration neu geladen
+  [OK] neue Anmeldung funktioniert
+  [OK] 2 Rückweg-Anweisung(en) in Datenbank shop
+
+Rückweg abgeschlossen.
+
+Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.

@@ -1,0 +1,206 @@
+pg-harden 0.3.0 — 127.0.0.1:5432, PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2), Benutzer postgres (Superuser), Verbindung ohne TLS
+Betriebssystem-Regeln: Server läuft auf diesem Rechner — geprüft
+Bestimmungsgemäße Verwendung: pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme bestimmt. Die Passwortprüfung
+liest pg_authid nur mit Superuser-Recht, rechnet eine kleine, fest umrissene Liste naheliegender Kandidaten
+sowie optional eine vom Betreiber bereitgestellte, auf 100 Einträge begrenzte Liste betriebsspezifischer
+Begriffe nach (keine Wörterbücher, kein Brute-Force), erzeugt keine Fehlanmeldungen und gibt nie ein
+Passwort aus — nur die Tatsache, dass eine Rolle einen Wert aus der Prüfliste verwendet. Der Client-Modus
+mit --user liest Dateien und Umgebungen anderer Benutzerkonten und setzt Administrator- bzw. root-Rechte und
+die Berechtigung voraus, diese Konten zu prüfen; gefundene Geheimnisse erscheinen nur mit Fundstelle und
+Zeile. Berichte können rollenbezogene und damit personenbeziehbare Befunde enthalten: vertraulich behandeln,
+nur zur Behebung verwenden, zeitnah löschen; wo Rollen Beschäftigten zugeordnet sind, Datenschutz und
+Mitbestimmung beachten. Eine Nutzung auf fremden Systemen oder Konten ohne Berechtigung ist bestimmungswidrig.
+Datenbanken: postgres, shop, template1 · Katalog: client 2026.10, postgresql 2026.10, system 2026.10
+
+== Patch-Stand ==
+[OK]            Hauptversion hat laut Katalogstand noch Support  [patch.supported_major]
+[OK]            Support-Tabelle des Katalogs kennt die laufende Hauptversion  [patch.catalog_current]
+
+== Konfiguration ==
+[OK]            Sicherheitsparameter sind nicht je Rolle oder Datenbank abgeschwächt  [conf.role_db_overrides]
+
+== Netzwerk und TLS ==
+[OK]            pg_hba.conf enthält keine fehlerhaften Zeilen  [hba.errors]
+[BEFUND]        TLS ist eingeschaltet (hoch)  [tls.ssl_enabled]
+                - ssl: ist 'off', erwartet 'on'
+[BEFUND]        Netzwerkzugänge in pg_hba.conf verlangen TLS (mittel)  [hba.host_without_tls]
+                - Zeile 130: host all all all trust
+[OK]            Mindestversion TLS 1.2  [tls.min_protocol]
+[OK]            Server lauscht nicht auf allen Netzwerkschnittstellen  [net.listen_addresses]
+
+== Authentifizierung ==
+[BEFUND]        Keine Rolle hat noch ein MD5-Passwort (hoch)  [auth.md5_passwords]
+                - reporting: Passwort als MD5-Hash gespeichert
+[OK]            Neue Passwörter werden als SCRAM-SHA-256 gespeichert  [auth.password_encryption]
+[BEFUND]        Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe) (hoch)  [auth.weak_passwords]
+                → Geprüft wurde nur eine kurze Liste naheliegender Werte — das sagt nichts über die Stärke der übrigen Passwörter.
+                - reporting: Passwort stammt aus der Prüfliste (wird nicht ausgegeben)
+                - shop_app: Passwort stammt aus der Prüfliste (wird nicht ausgegeben)
+[OK]            Kein Passwort im Klartext (Methode password)  [hba.cleartext_password]
+[BEFUND]        Kein Netzwerkzugang für alle Adressen (hoch)  [hba.open_to_all]
+                - Zeile 130: host all all all trust
+[BEFUND]        Keine Anmeldung ohne Passwort (trust) (hoch)  [hba.trust]
+                - Zeile 117: local all all 
+                - Zeile 119: host all all 127.0.0.1
+                - Zeile 121: host all all ::1
+                - Zeile 124: local replication all 
+                - Zeile 125: host replication all 127.0.0.1
+                - Zeile 126: host replication all ::1
+                - Zeile 130: host all all all
+[OK]            pg_hba.conf nutzt scram-sha-256 statt md5  [hba.md5_method]
+[BEFUND]        Superuser können sich nicht über das Netz anmelden (mittel)  [hba.superuser_remote]
+                - Zeile 130: host all all — Superuser postgres
+[BEFUND]        Bremse nach Fehlanmeldung (auth_delay) geladen (niedrig)  [auth.auth_delay]
+                - auth_delay: auth_delay nicht geladen
+[OK]            Anmeldevorgang ist zeitlich begrenzt (höchstens 60 Sekunden)  [auth.authentication_timeout]
+[BEFUND]        Passwortrichtlinie aktiv (passwordcheck oder credcheck) (niedrig)  [auth.password_policy]
+                - shared_preload_libraries: weder passwordcheck noch credcheck geladen
+
+== Rollen und Rechte ==
+[OK]            Niemand kann im Schema public ohne Freigabe Objekte anlegen  [db.public_schema_create]
+[OK]            Kein Nicht-Superuser hat Zugriff auf Serverdateien oder -programme  [roles.server_file_access]
+[BEFUND]        Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT) (mittel)  [db.public_connect]
+                - postgres: PUBLIC darf sich verbinden (CONNECT)
+                - shop: PUBLIC darf sich verbinden (CONNECT)
+[BEFUND]        Row-Level Security umgehen nur Superuser (mittel)  [roles.bypassrls]
+                - support: BYPASSRLS
+[OK]            Keine weiteren Superuser mit Anmelderecht  [roles.extra_superusers]
+[BEFUND]        Datenbank- und Rollennamen sind nicht für alle Rollen lesbar (niedrig)  [db.catalog_visibility]
+                - [postgres] postgres: PUBLIC darf lesen: pg_auth_members, pg_database, pg_group, pg_roles, pg_shdescription, pg_stat_database, pg_stat_database_conflicts, pg_user
+                - [shop] shop: PUBLIC darf lesen: pg_auth_members, pg_database, pg_group, pg_roles, pg_shdescription, pg_stat_database, pg_stat_database_conflicts, pg_user
+                - [template1] template1: PUBLIC darf lesen: pg_auth_members, pg_database, pg_group, pg_roles, pg_shdescription, pg_stat_database, pg_stat_database_conflicts, pg_user
+[BEFUND]        Temporäre Tabellen nur für berechtigte Rollen (niedrig)  [db.public_temp]
+                - [postgres] postgres: PUBLIC hat TEMPORARY
+                - [shop] shop: PUBLIC hat TEMPORARY
+[BEFUND]        ALTER SYSTEM ist gesperrt (niedrig)  [roles.allow_alter_system]
+                - allow_alter_system: ist 'on', erwartet 'off'
+[OK]            CREATEROLE nur für ausgewiesene Verwaltungsrollen  [roles.createrole]
+
+== Code in der Datenbank ==
+[OK]            SECURITY DEFINER-Funktionen haben einen festen search_path  [code.secdef_search_path]
+[OK]            Large Objects unterliegen der Rechteprüfung  [code.lo_compat_privileges]
+[OK]            Keine untrusted Sprachen installiert  [code.untrusted_languages]
+[SICHTEN]       Installierte Extensions (Bestandsliste)  [code.extensions]
+[SICHTEN]       Vorab geladene Bibliotheken (Bestandsliste)  [code.preload_libraries]
+
+== Protokollierung ==
+[BEFUND]        Protokolle werden in Dateien oder an syslog geschrieben (mittel)  [log.collector]
+                - logging_collector: weder logging_collector noch syslog/eventlog
+[OK]            Anmeldungen werden protokolliert  [log.connections]
+[BEFUND]        Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle (mittel)  [log.line_prefix]
+                - log_line_prefix: %m [%p] 
+[BEFUND]        pgAudit ist geladen (mittel)  [log.pgaudit]
+                - shared_preload_libraries: pgaudit nicht geladen
+[OK]            Debug-Ausgaben von Parser und Planer sind aus  [log.debug_print]
+[OK]            Protokolle liegen außerhalb des Datenverzeichnisses  [log.directory_outside_pgdata]
+[OK]            Sitzungsende wird protokolliert  [log.disconnections]
+[OK]            Protokolldateien sind nur für das Dienstkonto lesbar  [log.file_mode]
+[BEFUND]        Parameterwerte werden nicht vollständig protokolliert (niedrig)  [log.parameter_length]
+                - log_parameter_max_length: ist '-1', erwartet nicht '-1'
+[BEFUND]        Strukturänderungen werden protokolliert (niedrig)  [log.statement_ddl]
+                - log_statement: ist 'none', erwartet eines von: ddl, mod, all
+
+== Verfügbarkeit ==
+[OK]            WAL-Archivierung läuft fehlerfrei (wenn eingeschaltet)  [avail.archiver_failing]
+[BEFUND]        WAL-Archivierung ist eingeschaltet (mittel)  [avail.archive_enabled]
+                - archive_mode: ist 'off', erwartet eines von: on, always
+[OK]            Keine inaktiven Replikations-Slots  [avail.inactive_slots]
+[OK]            Replikations-Slots können das WAL nicht unbegrenzt festhalten  [avail.slot_wal_keep]
+[BEFUND]        Temporäre Dateien je Prozess sind begrenzt (mittel)  [avail.temp_file_limit]
+                - temp_file_limit: ist '-1', erwartet nicht '-1'
+[BEFUND]        Offen hängende Transaktionen werden beendet (niedrig)  [sess.idle_in_transaction]
+                - idle_in_transaction_session_timeout: ist '0', erwartet größer als 0
+
+== Datenschutz und Integrität ==
+[BEFUND]        Datenprüfsummen sind eingeschaltet (mittel)  [data.checksums]
+                - data_checksums: ist 'off', erwartet 'on'
+
+== Betriebssystem ==
+[OK]            Konfigurationsdateien sind vor Änderung und (pg_hba.conf) Einsicht geschützt  [os.config_permissions]
+[OK]            Datenverzeichnis ist nur für das Dienstkonto zugänglich  [os.pgdata_permissions]
+[OK]            Privater TLS-Schlüssel ist nur für das Dienstkonto lesbar  [os.ssl_key_permissions]
+                → TLS ist nicht eingeschaltet — nichts zu prüfen
+[OK]            Datenträger von Daten, WAL und Protokollen haben ausreichend freien Platz  [os.disk_free]
+                → Datenverzeichnis: 86 % frei (862.5 GiB)
+[OK]            Protokolldateien sind nicht für alle Benutzer des Systems lesbar  [os.log_permissions]
+                → Der Logging-Collector ist aus — Protokolle gehen an syslog/journald oder stderr des Dienstes
+[OK]            Dienst läuft unter einem eigenen, nicht privilegierten Konto  [os.service_account]
+                → Dienstkonto: postgres
+[OK]            Dienstdatei und Prozessumgebung enthalten keine Klartext-Geheimnisse  [os.service_unit]  — unvollständig
+                → nicht geprüft: Umgebung des Serverprozesses nicht lesbar (/proc/1/environ — root bzw. Dienstkonto nötig)
+                → Kein systemd-Dienst ermittelt — Dienstdatei nicht geprüft
+[OK]            Protokolle liegen nicht auf dem Datenträger der Daten oder des WAL  [os.log_own_volume]
+                → Der Logging-Collector ist aus — kein Log-Verzeichnis
+[OK]            Serverprogramm stammt aus der Paketverwaltung (Linux) bzw. ist unverändert (Windows)  [os.package_source]  — unvollständig
+                → nicht geprüft: Programmdatei des Serverprozesses nicht ermittelbar (/proc/1/exe — root nötig)
+[BEFUND]        Unix-Socket-Verzeichnis ist nicht für alle beschreibbar, Socket nicht für alle erreichbar (niedrig)  [os.socket_permissions]
+                - unix_socket_permissions: ist 0777 — jeder Benutzer des Systems kann den Socket erreichen; die Anmeldung schützt dann allein pg_hba.conf (peer)
+[OK]            Serverprozess legt neue Dateien nicht für alle lesbar an (umask)  [os.umask]
+
+== Zuordnung ISO/IEC 27001:2022 Annex A (Kennungen ungeprüft) ==
+Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber, ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
+5.15   Befund                     2 von 8  Zugangssteuerung
+5.17   Befund                     1 von 4  Authentisierungsinformationen
+8.2    Befund                     6 von 7  Privilegierte Zugriffsrechte
+8.3    Befund                     6 von 8  Einschränkung des Informationszugangs
+8.5    Befund                     4 von 8  Sichere Authentisierung
+8.6    Befund                     5 von 7  Kapazitätssteuerung
+8.8    nicht vollständig geprüft  2 von 3  Handhabung technischer Schwachstellen
+8.9    Befund                     3 von 7  Konfigurationsmanagement
+8.13   Befund                     1 von 2  Sicherung von Information
+8.15   Befund                     5 von 10 Protokollierung
+8.20   Befund                     1 von 4  Netzwerksicherheit
+8.24   Befund                     3 von 5  Verwendung von Kryptografie
+8.28   ohne Befund                1 von 1  Sichere Programmierung
+
+== Vergleich mit Bericht vom 2026-10-24T20:30:41+00:00 ==
+
+Behoben (4):
+  - Niemand kann im Schema public ohne Freigabe Objekte anlegen [db.public_schema_create]: [shop] shop.public
+  - SECURITY DEFINER-Funktionen haben einen festen search_path [code.secdef_search_path]: [shop] public.order_total(p_id bigint)
+  - Anmeldungen werden protokolliert [log.connections]: log_connections
+  - Sitzungsende wird protokolliert [log.disconnections]: log_disconnections
+
+Neu (0):
+
+Weiter offen (35):
+  - TLS ist eingeschaltet [tls.ssl_enabled]: ssl
+  - Netzwerkzugänge in pg_hba.conf verlangen TLS [hba.host_without_tls]: Zeile 130
+  - Keine Rolle hat noch ein MD5-Passwort [auth.md5_passwords]: reporting
+  - Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe) [auth.weak_passwords]: reporting
+  - Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe) [auth.weak_passwords]: shop_app
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 117
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 119
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 121
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 124
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 125
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 126
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 130
+  - Kein Netzwerkzugang für alle Adressen [hba.open_to_all]: Zeile 130
+  - Superuser können sich nicht über das Netz anmelden [hba.superuser_remote]: Zeile 130
+  - Bremse nach Fehlanmeldung (auth_delay) geladen [auth.auth_delay]: auth_delay
+  - Passwortrichtlinie aktiv (passwordcheck oder credcheck) [auth.password_policy]: shared_preload_libraries
+  - Row-Level Security umgehen nur Superuser [roles.bypassrls]: support
+  - ALTER SYSTEM ist gesperrt [roles.allow_alter_system]: allow_alter_system
+  - Temporäre Tabellen nur für berechtigte Rollen [db.public_temp]: [postgres] postgres
+  - Temporäre Tabellen nur für berechtigte Rollen [db.public_temp]: [shop] shop
+  - Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT) [db.public_connect]: postgres
+  - Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT) [db.public_connect]: shop
+  - Datenbank- und Rollennamen sind nicht für alle Rollen lesbar [db.catalog_visibility]: [postgres] postgres
+  - Datenbank- und Rollennamen sind nicht für alle Rollen lesbar [db.catalog_visibility]: [shop] shop
+  - Datenbank- und Rollennamen sind nicht für alle Rollen lesbar [db.catalog_visibility]: [template1] template1
+  - Protokolle werden in Dateien oder an syslog geschrieben [log.collector]: logging_collector
+  - Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle [log.line_prefix]: log_line_prefix
+  - Strukturänderungen werden protokolliert [log.statement_ddl]: log_statement
+  - pgAudit ist geladen [log.pgaudit]: shared_preload_libraries
+  - Parameterwerte werden nicht vollständig protokolliert [log.parameter_length]: log_parameter_max_length
+  - Temporäre Dateien je Prozess sind begrenzt [avail.temp_file_limit]: temp_file_limit
+  - WAL-Archivierung ist eingeschaltet [avail.archive_enabled]: archive_mode
+  - Offen hängende Transaktionen werden beendet [sess.idle_in_transaction]: idle_in_transaction_session_timeout
+  - Datenprüfsummen sind eingeschaltet [data.checksums]: data_checksums
+  - Unix-Socket-Verzeichnis ist nicht für alle beschreibbar, Socket nicht für alle erreichbar [os.socket_permissions]: unix_socket_permissions
+
+Nicht vergleichbar (diesmal nicht erneut geprüft) (0):
+
+Ergebnis: 24 Befunde · 35 OK · 2 zu sichten · 0 übersprungen · 0 Fehler · 2 unvollständig
+Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.

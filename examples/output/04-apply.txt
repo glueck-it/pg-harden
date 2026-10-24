@@ -1,0 +1,82 @@
+pg-harden 0.3.0 apply — 127.0.0.1:5432, PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2), Benutzer postgres
+
+Parameter (Include-Datei conf.d/90-pg-harden.conf):
+  - log_connections = 'on'  [log.connections]
+  - log_disconnections = 'on'  [log.disconnections]
+  · postgresql.conf enthält kein aktives include_dir: am Ende wird "include_dir = 'conf.d'" ergänzt (Sicherung der Datei, Verzeichnis /var/lib/postgresql/18/docker/conf.d wird angelegt)
+
+SQL in Datenbank shop:
+  - REVOKE CREATE ON SCHEMA public FROM PUBLIC;  [db.public_schema_create]
+  - ALTER ROUTINE public.order_total(p_id bigint) SET search_path = public, pg_temp;  [code.secdef_search_path]
+
+Nicht ausgeführt:
+  - hba.host_without_tls: braucht Freigabe: --include-confirm=hba.host_without_tls
+  - hba.trust: braucht Freigabe: --include-confirm=hba.trust
+  - roles.allow_alter_system: braucht Freigabe: --include-confirm=roles.allow_alter_system
+  - db.public_temp: braucht Freigabe: --include-confirm=db.public_temp
+  - db.public_connect: braucht Freigabe: --include-confirm=db.public_connect
+  - db.catalog_visibility: braucht Freigabe: --include-confirm=db.catalog_visibility
+  - log.collector: braucht Freigabe: --include-confirm=log.collector
+  - log.line_prefix: braucht Freigabe: --include-confirm=log.line_prefix
+  - log.statement_ddl: braucht Freigabe: --include-confirm=log.statement_ddl
+  - log.parameter_length: braucht Freigabe: --include-confirm=log.parameter_length
+
+== Ergebnis ==
+  [OK] Prüfung durch den Server: pg_hba_file_rules und pg_file_settings ohne Fehler
+  [OK] Neuladen: Konfiguration neu geladen
+  [OK] Anmeldetest: neue Anmeldung mit denselben Zugangsdaten funktioniert (geprüft ist nur diese Anmeldung, nicht Anwendungen und andere Rollen)
+  [OK] SQL: 2 Anweisung(en) in Datenbank shop
+
+== Vergleich mit Bericht vom 2026-10-24T20:30:42+00:00 ==
+
+Behoben (4):
+  - Niemand kann im Schema public ohne Freigabe Objekte anlegen [db.public_schema_create]: [shop] shop.public
+  - SECURITY DEFINER-Funktionen haben einen festen search_path [code.secdef_search_path]: [shop] public.order_total(p_id bigint)
+  - Anmeldungen werden protokolliert [log.connections]: log_connections
+  - Sitzungsende wird protokolliert [log.disconnections]: log_disconnections
+
+Neu (0):
+
+Weiter offen (35):
+  - TLS ist eingeschaltet [tls.ssl_enabled]: ssl
+  - Netzwerkzugänge in pg_hba.conf verlangen TLS [hba.host_without_tls]: Zeile 130
+  - Keine Rolle hat noch ein MD5-Passwort [auth.md5_passwords]: reporting
+  - Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe) [auth.weak_passwords]: reporting
+  - Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe) [auth.weak_passwords]: shop_app
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 117
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 119
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 121
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 124
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 125
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 126
+  - Keine Anmeldung ohne Passwort (trust) [hba.trust]: Zeile 130
+  - Kein Netzwerkzugang für alle Adressen [hba.open_to_all]: Zeile 130
+  - Superuser können sich nicht über das Netz anmelden [hba.superuser_remote]: Zeile 130
+  - Bremse nach Fehlanmeldung (auth_delay) geladen [auth.auth_delay]: auth_delay
+  - Passwortrichtlinie aktiv (passwordcheck oder credcheck) [auth.password_policy]: shared_preload_libraries
+  - Row-Level Security umgehen nur Superuser [roles.bypassrls]: support
+  - ALTER SYSTEM ist gesperrt [roles.allow_alter_system]: allow_alter_system
+  - Temporäre Tabellen nur für berechtigte Rollen [db.public_temp]: [postgres] postgres
+  - Temporäre Tabellen nur für berechtigte Rollen [db.public_temp]: [shop] shop
+  - Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT) [db.public_connect]: postgres
+  - Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT) [db.public_connect]: shop
+  - Datenbank- und Rollennamen sind nicht für alle Rollen lesbar [db.catalog_visibility]: [postgres] postgres
+  - Datenbank- und Rollennamen sind nicht für alle Rollen lesbar [db.catalog_visibility]: [shop] shop
+  - Datenbank- und Rollennamen sind nicht für alle Rollen lesbar [db.catalog_visibility]: [template1] template1
+  - Protokolle werden in Dateien oder an syslog geschrieben [log.collector]: logging_collector
+  - Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle [log.line_prefix]: log_line_prefix
+  - Strukturänderungen werden protokolliert [log.statement_ddl]: log_statement
+  - pgAudit ist geladen [log.pgaudit]: shared_preload_libraries
+  - Parameterwerte werden nicht vollständig protokolliert [log.parameter_length]: log_parameter_max_length
+  - Temporäre Dateien je Prozess sind begrenzt [avail.temp_file_limit]: temp_file_limit
+  - WAL-Archivierung ist eingeschaltet [avail.archive_enabled]: archive_mode
+  - Offen hängende Transaktionen werden beendet [sess.idle_in_transaction]: idle_in_transaction_session_timeout
+  - Datenprüfsummen sind eingeschaltet [data.checksums]: data_checksums
+  - Unix-Socket-Verzeichnis ist nicht für alle beschreibbar, Socket nicht für alle erreichbar [os.socket_permissions]: unix_socket_permissions
+
+Nicht vergleichbar (diesmal nicht erneut geprüft) (0):
+
+Journal, Sicherungen und Berichte: /root/journal
+Rückgängig machen: php pg-harden.php rollback --dir=/root/journal (gleiche Verbindung)
+
+Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.

@@ -1,0 +1,1503 @@
+{
+    "meta": {
+        "tool": "pg-harden 0.3.0",
+        "mode": "server",
+        "created_at": "2026-10-24T20:30:41+00:00",
+        "host": "127.0.0.1",
+        "server": "127.0.0.1:5432",
+        "ssl": false,
+        "certificate_verified": false,
+        "remote": false,
+        "server_version": "18.6 (Debian 18.6-1.pgdg13+2)",
+        "user": "postgres",
+        "superuser": true,
+        "local_server": true,
+        "local_note": "lokal (Prozess 1)",
+        "databases": [
+            "postgres",
+            "shop",
+            "template1"
+        ],
+        "refused_databases": [],
+        "catalog": "client 2026.10, postgresql 2026.10, system 2026.10",
+        "counts": {
+            "pass": 31,
+            "fail": 28,
+            "info": 2,
+            "skip": 0,
+            "error": 0,
+            "incomplete": 2
+        },
+        "mapping_disclaimer": "Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber, ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.",
+        "notice": "Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.",
+        "legal_notice": "pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme bestimmt. Die Passwortprüfung liest pg_authid nur mit Superuser-Recht, rechnet eine kleine, fest umrissene Liste naheliegender Kandidaten sowie optional eine vom Betreiber bereitgestellte, auf 100 Einträge begrenzte Liste betriebsspezifischer Begriffe nach (keine Wörterbücher, kein Brute-Force), erzeugt keine Fehlanmeldungen und gibt nie ein Passwort aus — nur die Tatsache, dass eine Rolle einen Wert aus der Prüfliste verwendet. Der Client-Modus mit --user liest Dateien und Umgebungen anderer Benutzerkonten und setzt Administrator- bzw. root-Rechte und die Berechtigung voraus, diese Konten zu prüfen; gefundene Geheimnisse erscheinen nur mit Fundstelle und Zeile. Berichte können rollenbezogene und damit personenbeziehbare Befunde enthalten: vertraulich behandeln, nur zur Behebung verwenden, zeitnah löschen; wo Rollen Beschäftigten zugeordnet sind, Datenschutz und Mitbestimmung beachten. Eine Nutzung auf fremden Systemen oder Konten ohne Berechtigung ist bestimmungswidrig."
+    },
+    "results": [
+        {
+            "id": "patch.supported_major",
+            "title": "Hauptversion hat laut Katalogstand noch Support",
+            "category": "Patch-Stand",
+            "severity": "high",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "patch.catalog_current",
+            "title": "Support-Tabelle des Katalogs kennt die laufende Hauptversion",
+            "category": "Patch-Stand",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "conf.role_db_overrides",
+            "title": "Sicherheitsparameter sind nicht je Rolle oder Datenbank abgeschwächt",
+            "category": "Konfiguration",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "net.listen_addresses",
+            "title": "Server lauscht nicht auf allen Netzwerkschnittstellen",
+            "category": "Netzwerk und TLS",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "tls.ssl_enabled",
+            "title": "TLS ist eingeschaltet",
+            "category": "Netzwerk und TLS",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "ssl = off",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "ssl",
+                    "detail": "ist 'off', erwartet 'on'",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "tls.min_protocol",
+            "title": "Mindestversion TLS 1.2",
+            "category": "Netzwerk und TLS",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "ssl_min_protocol_version = TLSv1.2",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "hba.errors",
+            "title": "pg_hba.conf enthält keine fehlerhaften Zeilen",
+            "category": "Netzwerk und TLS",
+            "severity": "high",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "hba.host_without_tls",
+            "title": "Netzwerkzugänge in pg_hba.conf verlangen TLS",
+            "category": "Netzwerk und TLS",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "Zeile 130",
+                    "detail": "host all all all trust",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 130,
+                    "hba_type": "host"
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "auth.password_encryption",
+            "title": "Neue Passwörter werden als SCRAM-SHA-256 gespeichert",
+            "category": "Authentifizierung",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "auto",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "password_encryption = scram-sha-256",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "auth.md5_passwords",
+            "title": "Keine Rolle hat noch ein MD5-Passwort",
+            "category": "Authentifizierung",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "reporting",
+                    "detail": "Passwort als MD5-Hash gespeichert",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "auth.weak_passwords",
+            "title": "Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe)",
+            "category": "Authentifizierung",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "Geprüft wurde nur eine kurze Liste naheliegender Werte — das sagt nichts über die Stärke der übrigen Passwörter."
+            ],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "reporting",
+                    "detail": "Passwort stammt aus der Prüfliste (wird nicht ausgegeben)",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                },
+                {
+                    "database": null,
+                    "object": "shop_app",
+                    "detail": "Passwort stammt aus der Prüfliste (wird nicht ausgegeben)",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "hba.trust",
+            "title": "Keine Anmeldung ohne Passwort (trust)",
+            "category": "Authentifizierung",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "Zeile 117",
+                    "detail": "local all all ",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 117,
+                    "hba_type": "local"
+                },
+                {
+                    "database": null,
+                    "object": "Zeile 119",
+                    "detail": "host all all 127.0.0.1",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 119,
+                    "hba_type": "host"
+                },
+                {
+                    "database": null,
+                    "object": "Zeile 121",
+                    "detail": "host all all ::1",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 121,
+                    "hba_type": "host"
+                },
+                {
+                    "database": null,
+                    "object": "Zeile 124",
+                    "detail": "local replication all ",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 124,
+                    "hba_type": "local"
+                },
+                {
+                    "database": null,
+                    "object": "Zeile 125",
+                    "detail": "host replication all 127.0.0.1",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 125,
+                    "hba_type": "host"
+                },
+                {
+                    "database": null,
+                    "object": "Zeile 126",
+                    "detail": "host replication all ::1",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 126,
+                    "hba_type": "host"
+                },
+                {
+                    "database": null,
+                    "object": "Zeile 130",
+                    "detail": "host all all all",
+                    "fix_sql": null,
+                    "rollback_sql": null,
+                    "hba_line": 130,
+                    "hba_type": "host"
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "hba.cleartext_password",
+            "title": "Kein Passwort im Klartext (Methode password)",
+            "category": "Authentifizierung",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "hba.md5_method",
+            "title": "pg_hba.conf nutzt scram-sha-256 statt md5",
+            "category": "Authentifizierung",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "hba.open_to_all",
+            "title": "Kein Netzwerkzugang für alle Adressen",
+            "category": "Authentifizierung",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "Zeile 130",
+                    "detail": "host all all all trust",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "hba.superuser_remote",
+            "title": "Superuser können sich nicht über das Netz anmelden",
+            "category": "Authentifizierung",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "Zeile 130",
+                    "detail": "host all all — Superuser postgres",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "auth.authentication_timeout",
+            "title": "Anmeldevorgang ist zeitlich begrenzt (höchstens 60 Sekunden)",
+            "category": "Authentifizierung",
+            "severity": "low",
+            "goal": "Verfügbarkeit",
+            "automation": "auto",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "authentication_timeout = 60 (s)",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "auth.auth_delay",
+            "title": "Bremse nach Fehlanmeldung (auth_delay) geladen",
+            "category": "Authentifizierung",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "auth_delay",
+                    "detail": "auth_delay nicht geladen",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "auth.password_policy",
+            "title": "Passwortrichtlinie aktiv (passwordcheck oder credcheck)",
+            "category": "Authentifizierung",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "shared_preload_libraries",
+                    "detail": "weder passwordcheck noch credcheck geladen",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "roles.extra_superusers",
+            "title": "Keine weiteren Superuser mit Anmelderecht",
+            "category": "Rollen und Rechte",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "roles.server_file_access",
+            "title": "Kein Nicht-Superuser hat Zugriff auf Serverdateien oder -programme",
+            "category": "Rollen und Rechte",
+            "severity": "high",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "roles.bypassrls",
+            "title": "Row-Level Security umgehen nur Superuser",
+            "category": "Rollen und Rechte",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "support",
+                    "detail": "BYPASSRLS",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "roles.createrole",
+            "title": "CREATEROLE nur für ausgewiesene Verwaltungsrollen",
+            "category": "Rollen und Rechte",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "roles.allow_alter_system",
+            "title": "ALTER SYSTEM ist gesperrt",
+            "category": "Rollen und Rechte",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "allow_alter_system = on",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "allow_alter_system",
+                    "detail": "ist 'on', erwartet 'off'",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "db.public_schema_create",
+            "title": "Niemand kann im Schema public ohne Freigabe Objekte anlegen",
+            "category": "Rollen und Rechte",
+            "severity": "high",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "database",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": "shop",
+                    "object": "shop.public",
+                    "detail": "PUBLIC hat CREATE",
+                    "fix_sql": "REVOKE CREATE ON SCHEMA public FROM PUBLIC;",
+                    "rollback_sql": "GRANT CREATE ON SCHEMA public TO PUBLIC;"
+                }
+            ],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "db.public_temp",
+            "title": "Temporäre Tabellen nur für berechtigte Rollen",
+            "category": "Rollen und Rechte",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "database",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": "postgres",
+                    "object": "postgres",
+                    "detail": "PUBLIC hat TEMPORARY",
+                    "fix_sql": "REVOKE TEMPORARY ON DATABASE postgres FROM PUBLIC;",
+                    "rollback_sql": "GRANT TEMPORARY ON DATABASE postgres TO PUBLIC;"
+                },
+                {
+                    "database": "shop",
+                    "object": "shop",
+                    "detail": "PUBLIC hat TEMPORARY",
+                    "fix_sql": "REVOKE TEMPORARY ON DATABASE shop FROM PUBLIC;",
+                    "rollback_sql": "GRANT TEMPORARY ON DATABASE shop TO PUBLIC;"
+                }
+            ],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "db.public_connect",
+            "title": "Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT)",
+            "category": "Rollen und Rechte",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "postgres",
+                    "detail": "PUBLIC darf sich verbinden (CONNECT)",
+                    "fix_sql": "REVOKE CONNECT ON DATABASE postgres FROM PUBLIC;",
+                    "rollback_sql": "GRANT CONNECT ON DATABASE postgres TO PUBLIC;"
+                },
+                {
+                    "database": null,
+                    "object": "shop",
+                    "detail": "PUBLIC darf sich verbinden (CONNECT)",
+                    "fix_sql": "REVOKE CONNECT ON DATABASE shop FROM PUBLIC;",
+                    "rollback_sql": "GRANT CONNECT ON DATABASE shop TO PUBLIC;"
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "db.catalog_visibility",
+            "title": "Datenbank- und Rollennamen sind nicht für alle Rollen lesbar",
+            "category": "Rollen und Rechte",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "database",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": "postgres",
+                    "object": "postgres",
+                    "detail": "PUBLIC darf lesen: pg_auth_members, pg_database, pg_group, pg_roles, pg_shdescription, pg_stat_database, pg_stat_database_conflicts, pg_user",
+                    "fix_sql": "REVOKE SELECT ON TABLE pg_catalog.pg_auth_members, pg_catalog.pg_database, pg_catalog.pg_group, pg_catalog.pg_roles, pg_catalog.pg_shdescription, pg_catalog.pg_stat_database, pg_catalog.pg_stat_database_conflicts, pg_catalog.pg_user FROM PUBLIC;",
+                    "rollback_sql": "GRANT SELECT ON TABLE pg_catalog.pg_auth_members, pg_catalog.pg_database, pg_catalog.pg_group, pg_catalog.pg_roles, pg_catalog.pg_shdescription, pg_catalog.pg_stat_database, pg_catalog.pg_stat_database_conflicts, pg_catalog.pg_user TO PUBLIC;"
+                },
+                {
+                    "database": "shop",
+                    "object": "shop",
+                    "detail": "PUBLIC darf lesen: pg_auth_members, pg_database, pg_group, pg_roles, pg_shdescription, pg_stat_database, pg_stat_database_conflicts, pg_user",
+                    "fix_sql": "REVOKE SELECT ON TABLE pg_catalog.pg_auth_members, pg_catalog.pg_database, pg_catalog.pg_group, pg_catalog.pg_roles, pg_catalog.pg_shdescription, pg_catalog.pg_stat_database, pg_catalog.pg_stat_database_conflicts, pg_catalog.pg_user FROM PUBLIC;",
+                    "rollback_sql": "GRANT SELECT ON TABLE pg_catalog.pg_auth_members, pg_catalog.pg_database, pg_catalog.pg_group, pg_catalog.pg_roles, pg_catalog.pg_shdescription, pg_catalog.pg_stat_database, pg_catalog.pg_stat_database_conflicts, pg_catalog.pg_user TO PUBLIC;"
+                },
+                {
+                    "database": "template1",
+                    "object": "template1",
+                    "detail": "PUBLIC darf lesen: pg_auth_members, pg_database, pg_group, pg_roles, pg_shdescription, pg_stat_database, pg_stat_database_conflicts, pg_user",
+                    "fix_sql": "REVOKE SELECT ON TABLE pg_catalog.pg_auth_members, pg_catalog.pg_database, pg_catalog.pg_group, pg_catalog.pg_roles, pg_catalog.pg_shdescription, pg_catalog.pg_stat_database, pg_catalog.pg_stat_database_conflicts, pg_catalog.pg_user FROM PUBLIC;",
+                    "rollback_sql": "GRANT SELECT ON TABLE pg_catalog.pg_auth_members, pg_catalog.pg_database, pg_catalog.pg_group, pg_catalog.pg_roles, pg_catalog.pg_shdescription, pg_catalog.pg_stat_database, pg_catalog.pg_stat_database_conflicts, pg_catalog.pg_user TO PUBLIC;"
+                }
+            ],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "code.secdef_search_path",
+            "title": "SECURITY DEFINER-Funktionen haben einen festen search_path",
+            "category": "Code in der Datenbank",
+            "severity": "high",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "database",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": "shop",
+                    "object": "public.order_total(p_id bigint)",
+                    "detail": "SECURITY DEFINER ohne search_path",
+                    "fix_sql": "ALTER ROUTINE public.order_total(p_id bigint) SET search_path = public, pg_temp;",
+                    "rollback_sql": "ALTER ROUTINE public.order_total(p_id bigint) RESET search_path;"
+                }
+            ],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "code.untrusted_languages",
+            "title": "Keine untrusted Sprachen installiert",
+            "category": "Code in der Datenbank",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "database",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "code.lo_compat_privileges",
+            "title": "Large Objects unterliegen der Rechteprüfung",
+            "category": "Code in der Datenbank",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "lo_compat_privileges = off",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "code.extensions",
+            "title": "Installierte Extensions (Bestandsliste)",
+            "category": "Code in der Datenbank",
+            "severity": "info",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "database",
+            "status": "info",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "code.preload_libraries",
+            "title": "Vorab geladene Bibliotheken (Bestandsliste)",
+            "category": "Code in der Datenbank",
+            "severity": "info",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "info",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "log.collector",
+            "title": "Protokolle werden in Dateien oder an syslog geschrieben",
+            "category": "Protokollierung",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "logging_collector",
+                    "detail": "weder logging_collector noch syslog/eventlog",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.connections",
+            "title": "Anmeldungen werden protokolliert",
+            "category": "Protokollierung",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "auto",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "log_connections",
+                    "detail": "aus",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.disconnections",
+            "title": "Sitzungsende wird protokolliert",
+            "category": "Protokollierung",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "auto",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "log_disconnections = off",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "log_disconnections",
+                    "detail": "ist 'off', erwartet 'on'",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.line_prefix",
+            "title": "Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle",
+            "category": "Protokollierung",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "log_line_prefix",
+                    "detail": "%m [%p] ",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.statement_ddl",
+            "title": "Strukturänderungen werden protokolliert",
+            "category": "Protokollierung",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "log_statement = none",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "log_statement",
+                    "detail": "ist 'none', erwartet eines von: ddl, mod, all",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.pgaudit",
+            "title": "pgAudit ist geladen",
+            "category": "Protokollierung",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "shared_preload_libraries",
+                    "detail": "pgaudit nicht geladen",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.parameter_length",
+            "title": "Parameterwerte werden nicht vollständig protokolliert",
+            "category": "Protokollierung",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "log_parameter_max_length = -1 (B)",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "log_parameter_max_length",
+                    "detail": "ist '-1', erwartet nicht '-1'",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.debug_print",
+            "title": "Debug-Ausgaben von Parser und Planer sind aus",
+            "category": "Protokollierung",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "auto",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "log.file_mode",
+            "title": "Protokolldateien sind nur für das Dienstkonto lesbar",
+            "category": "Protokollierung",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "log.directory_outside_pgdata",
+            "title": "Protokolle liegen außerhalb des Datenverzeichnisses",
+            "category": "Protokollierung",
+            "severity": "low",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "avail.temp_file_limit",
+            "title": "Temporäre Dateien je Prozess sind begrenzt",
+            "category": "Verfügbarkeit",
+            "severity": "medium",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "temp_file_limit = -1 (kB)",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "temp_file_limit",
+                    "detail": "ist '-1', erwartet nicht '-1'",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "avail.slot_wal_keep",
+            "title": "Replikations-Slots können das WAL nicht unbegrenzt festhalten",
+            "category": "Verfügbarkeit",
+            "severity": "medium",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "avail.inactive_slots",
+            "title": "Keine inaktiven Replikations-Slots",
+            "category": "Verfügbarkeit",
+            "severity": "medium",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "avail.archive_enabled",
+            "title": "WAL-Archivierung ist eingeschaltet",
+            "category": "Verfügbarkeit",
+            "severity": "medium",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "archive_mode = off",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "archive_mode",
+                    "detail": "ist 'off', erwartet eines von: on, always",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "avail.archiver_failing",
+            "title": "WAL-Archivierung läuft fehlerfrei (wenn eingeschaltet)",
+            "category": "Verfügbarkeit",
+            "severity": "high",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "sess.idle_in_transaction",
+            "title": "Offen hängende Transaktionen werden beendet",
+            "category": "Verfügbarkeit",
+            "severity": "low",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "idle_in_transaction_session_timeout = 0 (ms)",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "idle_in_transaction_session_timeout",
+                    "detail": "ist '0', erwartet größer als 0",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "data.checksums",
+            "title": "Datenprüfsummen sind eingeschaltet",
+            "category": "Datenschutz und Integrität",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "data_checksums = off",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "data_checksums",
+                    "detail": "ist 'off', erwartet 'on'",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "os.pgdata_permissions",
+            "title": "Datenverzeichnis ist nur für das Dienstkonto zugänglich",
+            "category": "Betriebssystem",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.config_permissions",
+            "title": "Konfigurationsdateien sind vor Änderung und (pg_hba.conf) Einsicht geschützt",
+            "category": "Betriebssystem",
+            "severity": "high",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.ssl_key_permissions",
+            "title": "Privater TLS-Schlüssel ist nur für das Dienstkonto lesbar",
+            "category": "Betriebssystem",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "TLS ist nicht eingeschaltet — nichts zu prüfen"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.log_permissions",
+            "title": "Protokolldateien sind nicht für alle Benutzer des Systems lesbar",
+            "category": "Betriebssystem",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "Der Logging-Collector ist aus — Protokolle gehen an syslog/journald oder stderr des Dienstes"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.socket_permissions",
+            "title": "Unix-Socket-Verzeichnis ist nicht für alle beschreibbar, Socket nicht für alle erreichbar",
+            "category": "Betriebssystem",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "unix_socket_permissions",
+                    "detail": "ist 0777 — jeder Benutzer des Systems kann den Socket erreichen; die Anmeldung schützt dann allein pg_hba.conf (peer)",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "os.umask",
+            "title": "Serverprozess legt neue Dateien nicht für alle lesbar an (umask)",
+            "category": "Betriebssystem",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.service_account",
+            "title": "Dienst läuft unter einem eigenen, nicht privilegierten Konto",
+            "category": "Betriebssystem",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "Dienstkonto: postgres"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.service_unit",
+            "title": "Dienstdatei und Prozessumgebung enthalten keine Klartext-Geheimnisse",
+            "category": "Betriebssystem",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": true,
+            "value": "",
+            "notes": [
+                "nicht geprüft: Umgebung des Serverprozesses nicht lesbar (/proc/1/environ — root bzw. Dienstkonto nötig)",
+                "Kein systemd-Dienst ermittelt — Dienstdatei nicht geprüft"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.log_own_volume",
+            "title": "Protokolle liegen nicht auf dem Datenträger der Daten oder des WAL",
+            "category": "Betriebssystem",
+            "severity": "low",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "Der Logging-Collector ist aus — kein Log-Verzeichnis"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.disk_free",
+            "title": "Datenträger von Daten, WAL und Protokollen haben ausreichend freien Platz",
+            "category": "Betriebssystem",
+            "severity": "medium",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "Datenverzeichnis: 86 % frei (862.5 GiB)"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.package_source",
+            "title": "Serverprogramm stammt aus der Paketverwaltung (Linux) bzw. ist unverändert (Windows)",
+            "category": "Betriebssystem",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": true,
+            "value": "",
+            "notes": [
+                "nicht geprüft: Programmdatei des Serverprozesses nicht ermittelbar (/proc/1/exe — root nötig)"
+            ],
+            "findings": [],
+            "checked_databases": []
+        }
+    ],
+    "mappings": {
+        "bsi-app43": {
+            "framework": "BSI IT-Grundschutz, Baustein APP.4.3 Relationale Datenbanken (Kompendium 2023)",
+            "verified": false,
+            "note": "Platzhalter: Anforderungsnummern erst nach Abgleich mit dem BSI-Original eintragen, nicht aus dem Gedächtnis. Grundschutz++ (OSCAL) prüfen.",
+            "controls": []
+        },
+        "iso27001-2022": {
+            "framework": "ISO/IEC 27001:2022 Annex A",
+            "verified": false,
+            "note": "Nur Kennungen und Kurztitel in Anlehnung an die Norm, kein Normtext. Kennungen und Titel vor Freigabe gegen die Norm prüfen.",
+            "controls": [
+                {
+                    "control": "5.15",
+                    "title": "Zugangssteuerung",
+                    "state": "Befund",
+                    "rules_clean": "1 von 8",
+                    "rules": [
+                        "hba.open_to_all",
+                        "hba.superuser_remote",
+                        "db.public_schema_create",
+                        "db.public_temp",
+                        "roles.bypassrls",
+                        "os.pgdata_permissions",
+                        "db.public_connect",
+                        "db.catalog_visibility"
+                    ]
+                },
+                {
+                    "control": "5.17",
+                    "title": "Authentisierungsinformationen",
+                    "state": "Befund",
+                    "rules_clean": "1 von 4",
+                    "rules": [
+                        "auth.password_encryption",
+                        "auth.md5_passwords",
+                        "auth.weak_passwords",
+                        "auth.password_policy"
+                    ]
+                },
+                {
+                    "control": "8.2",
+                    "title": "Privilegierte Zugriffsrechte",
+                    "state": "Befund",
+                    "rules_clean": "5 von 7",
+                    "rules": [
+                        "roles.extra_superusers",
+                        "roles.server_file_access",
+                        "roles.createrole",
+                        "roles.bypassrls",
+                        "code.secdef_search_path",
+                        "code.untrusted_languages",
+                        "os.service_account"
+                    ]
+                },
+                {
+                    "control": "8.3",
+                    "title": "Einschränkung des Informationszugangs",
+                    "state": "Befund",
+                    "rules_clean": "5 von 8",
+                    "rules": [
+                        "db.public_schema_create",
+                        "code.lo_compat_privileges",
+                        "roles.bypassrls",
+                        "os.pgdata_permissions",
+                        "os.config_permissions",
+                        "os.log_permissions",
+                        "os.umask",
+                        "db.public_connect"
+                    ]
+                },
+                {
+                    "control": "8.5",
+                    "title": "Sichere Authentisierung",
+                    "state": "Befund",
+                    "rules_clean": "4 von 8",
+                    "rules": [
+                        "hba.trust",
+                        "hba.cleartext_password",
+                        "hba.md5_method",
+                        "auth.weak_passwords",
+                        "auth.authentication_timeout",
+                        "auth.auth_delay",
+                        "auth.password_encryption",
+                        "os.service_unit"
+                    ]
+                },
+                {
+                    "control": "8.6",
+                    "title": "Kapazitätssteuerung",
+                    "state": "Befund",
+                    "rules_clean": "5 von 7",
+                    "rules": [
+                        "avail.temp_file_limit",
+                        "avail.slot_wal_keep",
+                        "avail.inactive_slots",
+                        "sess.idle_in_transaction",
+                        "log.directory_outside_pgdata",
+                        "os.log_own_volume",
+                        "os.disk_free"
+                    ]
+                },
+                {
+                    "control": "8.8",
+                    "title": "Handhabung technischer Schwachstellen",
+                    "state": "nicht vollständig geprüft",
+                    "rules_clean": "2 von 3",
+                    "rules": [
+                        "patch.supported_major",
+                        "patch.catalog_current",
+                        "os.package_source"
+                    ]
+                },
+                {
+                    "control": "8.9",
+                    "title": "Konfigurationsmanagement",
+                    "state": "Befund",
+                    "rules_clean": "3 von 7",
+                    "rules": [
+                        "roles.allow_alter_system",
+                        "hba.errors",
+                        "conf.role_db_overrides",
+                        "code.preload_libraries",
+                        "code.extensions",
+                        "os.config_permissions",
+                        "os.service_unit"
+                    ]
+                },
+                {
+                    "control": "8.13",
+                    "title": "Sicherung von Information",
+                    "state": "Befund",
+                    "rules_clean": "1 von 2",
+                    "rules": [
+                        "avail.archive_enabled",
+                        "avail.archiver_failing"
+                    ]
+                },
+                {
+                    "control": "8.15",
+                    "title": "Protokollierung",
+                    "state": "Befund",
+                    "rules_clean": "3 von 10",
+                    "rules": [
+                        "log.collector",
+                        "log.connections",
+                        "log.disconnections",
+                        "log.line_prefix",
+                        "log.statement_ddl",
+                        "log.pgaudit",
+                        "log.parameter_length",
+                        "log.debug_print",
+                        "log.file_mode",
+                        "os.log_permissions"
+                    ]
+                },
+                {
+                    "control": "8.20",
+                    "title": "Netzwerksicherheit",
+                    "state": "Befund",
+                    "rules_clean": "1 von 4",
+                    "rules": [
+                        "net.listen_addresses",
+                        "hba.open_to_all",
+                        "hba.host_without_tls",
+                        "os.socket_permissions"
+                    ]
+                },
+                {
+                    "control": "8.24",
+                    "title": "Verwendung von Kryptografie",
+                    "state": "Befund",
+                    "rules_clean": "3 von 5",
+                    "rules": [
+                        "tls.ssl_enabled",
+                        "tls.min_protocol",
+                        "hba.host_without_tls",
+                        "auth.password_encryption",
+                        "os.ssl_key_permissions"
+                    ]
+                },
+                {
+                    "control": "8.28",
+                    "title": "Sichere Programmierung",
+                    "state": "Befund",
+                    "rules_clean": "0 von 1",
+                    "rules": [
+                        "code.secdef_search_path"
+                    ]
+                }
+            ]
+        }
+    }
+}
