@@ -39,7 +39,8 @@ This English README is a condensed version of [README.de.md](README.de.md), whic
 > accounts without authorization is contrary to the intended use.
 
 *The wording of these two notices ("Intended use" and "Check it yourself — no warranty") is a translation. The original German text is shown by
-`--help` and at the top of every report that contains password or client results; the tool's own output is in German.*
+`--help` and in the separate "Hinweise" block at the end of the reports: the intended-use notice in every report with password or client results,
+the no-warranty notice in every report and in the output of `apply` and `rollback`. The tool's own output is in German.*
 
 ## Check it yourself — no warranty
 

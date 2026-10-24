@@ -2,7 +2,7 @@
     "meta": {
         "tool": "pg-harden 0.3.0",
         "mode": "server",
-        "created_at": "2026-10-24T20:30:41+00:00",
+        "created_at": "2026-10-24T21:06:22+00:00",
         "host": "127.0.0.1",
         "server": "127.0.0.1:5432",
         "ssl": false,
@@ -1284,7 +1284,7 @@
             "incomplete": false,
             "value": "",
             "notes": [
-                "Datenverzeichnis: 86 % frei (862.5 GiB)"
+                "Datenverzeichnis: 86 % frei (861.3 GiB)"
             ],
             "findings": [],
             "checked_databases": []

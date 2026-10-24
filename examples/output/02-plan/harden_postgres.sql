@@ -1,4 +1,4 @@
--- pg-harden 0.3.0 — für Datenbank postgres, erzeugt 2026-10-24 20:30
+-- pg-harden 0.3.0 — für Datenbank postgres, erzeugt 2026-10-24 21:06
 -- Automatisch erzeugter Vorschlag. Auswirkungen auf Anwendungen vor dem Ausführen in einer Testumgebung prüfen.
 -- Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.
 -- Ausführen: Verbindung zur Zieldatenbank selbst herstellen, dann mit -v ON_ERROR_STOP=1 -f harden_postgres.sql einspielen.

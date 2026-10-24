@@ -28,7 +28,7 @@ Hinter einem PgBouncer im Transaction-Pooling gelten Sitzungseinstellungen nicht
 > zeitnah löschen; wo Rollen Beschäftigten zugeordnet sind, Datenschutz und Mitbestimmung beachten. Eine Nutzung auf
 > fremden Systemen oder Konten ohne Berechtigung ist bestimmungswidrig.
 
-Derselbe Text steht in `--help` und im Kopf jedes Berichts, der Passwort- oder Client-Ergebnisse enthält.
+Derselbe Text steht in `--help` und im abgesetzten Block „Hinweise“ am Ende jedes Berichts, der Passwort- oder Client-Ergebnisse enthält.
 
 ## Selbst prüfen — ohne Gewähr
 

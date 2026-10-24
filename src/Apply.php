@@ -286,7 +286,7 @@ final class Guard
       // Last resort: nothing more to do than to tell the operator where the backups are.
     }
     try {
-      fwrite(STDERR, 'pg-harden: Lauf unterbrochen. Sicherungen und Journal: ' . Text::printable($journal->dir) . "\n");
+      Out::err('pg-harden: Lauf unterbrochen. Sicherungen und Journal: ' . Text::printable($journal->dir) . "\n");
     } catch (Throwable) {
     }
   }
@@ -660,14 +660,15 @@ final class Applier
     [$only, $confirmed] = $this->selection();
     $plan = $this->plan($before, $ctx, $only, $confirmed);
 
-    fwrite(STDOUT, 'pg-harden ' . PG_HARDEN_VERSION . ' apply — ' . Text::printable($ctx->server) . ', PostgreSQL ' . Text::printable($ctx->version)
-      . ', Benutzer ' . Text::printable($ctx->user) . "\n" . self::describe($plan));
+    Out::write('pg-harden ' . PG_HARDEN_VERSION . ' · apply · ' . ($execute ? 'Ausführung' : 'Trockenlauf') . ' · ' . TextRenderer::when(date(DATE_ATOM)) . "\n"
+      . TextRenderer::field('Server', Text::printable($ctx->server) . ' · PostgreSQL ' . Text::printable($ctx->version) . ' · Benutzer ' . Text::printable($ctx->user))
+      . self::describe($plan));
     if ($plan['conf'] === [] && $plan['hba'] === [] && $plan['sql'] === []) {
-      fwrite(STDOUT, "\nNichts auszuführen.\n");
+      Out::write("\nNichts auszuführen.\n" . TextRenderer::notices(null));
       return Report::exitCode($before);
     }
     if (!$execute) {
-      fwrite(STDOUT, "\nTrockenlauf — nichts geändert. Ausführen: --execute --dir=<NEUES_VERZEICHNIS> (Sicherungen und Journal).\n");
+      Out::write("\nTrockenlauf — nichts geändert. Ausführen mit --execute --dir=<NEUES_VERZEICHNIS> (Sicherungen und Journal).\n" . TextRenderer::notices(null));
       return Report::exitCode($before);
     }
     $dir = $this->opt->get('dir') ?? throw new HardenException('apply --execute braucht --dir=<neues Verzeichnis> für Sicherungen und Journal.');
@@ -712,8 +713,10 @@ final class Applier
       $journal->flush();
     } catch (Throwable) {
     }
-    fwrite(STDOUT, "\n== Ergebnis ==\n" . self::summary($journal) . $comparison
-      . "\nJournal, Sicherungen und Berichte: $dir\nRückgängig machen: php pg-harden.php rollback --dir=$dir (gleiche Verbindung)\n\n" . RESPONSIBILITY_NOTICE . "\n");
+    Out::write("\nERGEBNIS\n" . self::summary($journal) . $comparison
+      . "\nJOURNAL\n" . TextRenderer::field('  Verzeichnis', Text::printable($dir) . ' (Sicherungen, Berichte vorher/nachher, Protokoll)')
+      . TextRenderer::field('  Rückgängig', 'php pg-harden.php rollback --dir=' . Text::printable($dir) . ' (gleiche Verbindung)')
+      . TextRenderer::notices(null));
     return $failed || $after === null ? 2 : (Report::exitCode($after) === 1 ? 1 : (self::hasWarnings($journal) ? 3 : 0));
   }
 
@@ -747,7 +750,7 @@ final class Applier
     if (!function_exists('stream_isatty') || !stream_isatty(STDIN)) {
       throw new HardenException('apply --execute braucht --yes, wenn keine Eingabe möglich ist.');
     }
-    fwrite(STDOUT, "\nDiese Änderungen jetzt ausführen? Zum Bestätigen \"ja\" eingeben: ");
+    Out::err("\nDiese Änderungen jetzt ausführen? Zum Bestätigen \"ja\" eingeben: ");
     if (trim((string) fgets(STDIN)) !== 'ja') {
       throw new HardenException('Abgebrochen — nichts geändert.');
     }
@@ -775,7 +778,7 @@ final class Applier
         continue;
       }
       if ($rule->automation() === 'confirm' && !in_array($r['id'], $confirmed, true)) {
-        $plan['skipped'][] = [$r['id'], 'braucht Freigabe: --include-confirm=' . $r['id']];
+        $plan['skipped'][] = [$r['id'], 'braucht Freigabe: --include-confirm=' . $r['id'], 'confirm'];
         continue;
       }
       match ($fix['type']) {
@@ -911,37 +914,54 @@ final class Applier
 
   private static function describe(array $plan): string
   {
-    $out = '';
+    $col = fn(string $left, string $right) => '    ' . mb_str_pad($left, 44) . ' ' . $right . "\n";
+    $out = "\nGEPLANTE ÄNDERUNGEN\n";
+    if ($plan['conf'] === [] && $plan['hba'] === [] && $plan['sql'] === []) {
+      $out .= "  keine\n";
+    }
     if ($plan['conf'] !== []) {
-      $out .= "\nParameter (Include-Datei conf.d/90-pg-harden.conf):\n";
+      $out .= "  Parameter → conf.d/90-pg-harden.conf\n";
       foreach ($plan['conf'] as $a) {
-        $out .= "  - {$a['name']} = '{$a['value']}'  [{$a['rule']}]" . ($a['restart'] ? '  (Neustart nötig, wird nicht ausgeführt)' : '') . "\n";
+        $out .= $col("{$a['name']} = '{$a['value']}'", $a['rule'] . ($a['restart'] ? ' (Neustart nötig, wird nicht ausgeführt)' : ''));
       }
     }
     foreach ($plan['notes'] as $note) {
-      $out .= '  · ' . $note . "\n";
+      $out .= '    Hinweis: ' . TextRenderer::wrap($note, 13) . "\n";
     }
     if ($plan['hba'] !== []) {
-      $out .= "\npg_hba.conf (Sicherung, Prüfung durch den Server, Anmeldetest nach dem Neuladen — der Test deckt nur die Anmeldung dieses Werkzeugs ab, nicht Anwendungen und andere Rollen):\n";
+      $out .= "  pg_hba.conf — Sicherung, Prüfung durch den Server, Anmeldetest nach dem Neuladen\n"
+        . "    (der Test deckt nur die Anmeldung dieses Werkzeugs ab, nicht Anwendungen und andere Rollen)\n";
       foreach ($plan['hba'] as $a) {
-        $out .= "  - Zeile {$a['line']}: " . ($a['kind'] === 'type' ? 'Typ' : 'Methode') . ' ' . implode('/', $a['from']) . " → {$a['to']}  [{$a['rule']}]\n";
+        $out .= $col("Zeile {$a['line']}: " . ($a['kind'] === 'type' ? 'Typ' : 'Methode') . ' ' . implode('/', $a['from']) . " → {$a['to']}", $a['rule']);
       }
     }
     foreach ($plan['sql'] as $db => $items) {
-      $out .= "\nSQL in Datenbank " . Text::printable((string) $db) . ":\n";
+      $out .= '  SQL in Datenbank ' . Text::printable((string) $db) . "\n";
       foreach ($items as $i) {
-        $out .= '  - ' . Text::printable($i['fix_sql']) . "  [{$i['rule']}]\n";
+        $out .= '    ' . mb_str_pad($i['rule'], 29) . ' ' . TextRenderer::wrap(Text::printable($i['fix_sql']), 34) . "\n";
       }
     }
     if ($plan['skipped'] !== []) {
-      $out .= "\nNicht ausgeführt:\n";
-      $seen = [];
-      foreach ($plan['skipped'] as [$id, $why]) {
-        if (isset($seen[$id . $why])) {
-          continue;
+      $confirm = [];
+      $other = [];
+      foreach ($plan['skipped'] as $entry) {
+        [$id, $why] = $entry;
+        if (($entry[2] ?? null) === 'confirm') {
+          $confirm[$id] = true;
+        } else {
+          $other[$id . "\0" . $why] = [$id, $why];
         }
-        $seen[$id . $why] = true;
-        $out .= "  - $id: $why\n";
+      }
+      $out .= "\nNICHT AUSGEFÜHRT\n";
+      if ($confirm !== []) {
+        $out .= "  Brauchen eine Freigabe mit --include-confirm=<Kennung>:\n    " . TextRenderer::wrap(implode(', ', array_keys($confirm)), 4) . "\n";
+      }
+      if ($other !== []) {
+        $out .= $confirm !== [] ? "  Aus anderen Gründen:\n" : '';
+        $ind = $confirm !== [] ? 4 : 2;
+        foreach ($other as [$id, $why]) {
+          $out .= str_repeat(' ', $ind) . mb_str_pad($id, 29) . ' ' . TextRenderer::wrap($why, $ind + 30) . "\n";
+        }
       }
     }
     return $out;
@@ -951,7 +971,7 @@ final class Applier
   {
     $out = '';
     foreach ($j->data['steps'] as $s) {
-      $out .= sprintf("  [%s] %s: %s\n", $s['status'], $s['phase'], Text::printable($s['message']));
+      $out .= "  [{$s['status']}] " . TextRenderer::wrap($s['phase'] . ': ' . Text::printable($s['message']), 5 + mb_strlen($s['status'])) . "\n";
     }
     return $out;
   }
@@ -1112,7 +1132,7 @@ final class Applier
       try {
         $journal->step($p, $status, $m);
       } catch (Throwable) {
-        fwrite(STDERR, 'pg-harden: ' . Text::printable("$p [$status] $m") . "\n");
+        Out::err('pg-harden: ' . Text::printable("$p [$status] $m") . "\n");
       }
     };
     $problems = [];
@@ -1342,7 +1362,7 @@ final class Applier
             $journal->step('SQL', 'FEHLER', 'Datenbank ' . $db . ' unverändert: ' . $reason);
           }
         } catch (Throwable) {
-          fwrite(STDERR, "pg-harden: Journal nicht beschreibbar — Zustand von Datenbank $db prüfen.\n");
+          Out::err("pg-harden: Journal nicht beschreibbar — Zustand von Datenbank $db prüfen.\n");
         }
         $allOk = false;
       }
@@ -1382,6 +1402,10 @@ final class Rollback
       if ($ctx->local === null) {
         throw new HardenException('Die Dateien lassen sich nur auf dem Server selbst zurückspielen (' . $ctx->localNote . ').');
       }
+      // Without pcntl a closed output or a signal could end the process between "restored" and "reloaded" (Linux; Windows has no SIGPIPE).
+      if (PHP_OS_FAMILY !== 'Windows' && !function_exists('pcntl_signal')) {
+        throw new HardenException('rollback mit Dateien braucht unter Linux die PHP-Erweiterung pcntl (Schutz vor Abbruch mitten im Zurückspielen) — nichts geändert.');
+      }
       $allowed = ServerFiles::allowedTargets($ctx->local);
       foreach ($data['files'] as $f) {
         if (!in_array(ServerFiles::norm($f['path']), $allowed, true)) {
@@ -1389,10 +1413,19 @@ final class Rollback
         }
       }
     }
+    // Restoring and reloading must not be cut short by Ctrl+C, a closed terminal or a stopped service.
+    if (function_exists('pcntl_signal')) {
+      foreach ([SIGINT, SIGTERM, SIGHUP] as $signal) {
+        pcntl_signal($signal, SIG_IGN);
+      }
+    }
     $log = ['started_at' => date(DATE_ATOM), 'steps' => []];
+    Out::write('pg-harden ' . PG_HARDEN_VERSION . ' · rollback · ' . TextRenderer::when($log['started_at']) . "\n"
+      . TextRenderer::field('Server', Text::printable($ctx->server) . ' · PostgreSQL ' . Text::printable($ctx->version) . ' · Benutzer ' . Text::printable($ctx->user))
+      . TextRenderer::field('Journal', Text::printable($dir) . ' (apply vom ' . TextRenderer::when((string) ($data['started_at'] ?? '')) . ')') . "\nSCHRITTE\n");
     $step = function (string $status, string $message) use (&$log): void {
       $log['steps'][] = ['status' => $status, 'message' => $message];
-      fwrite(STDOUT, "  [$status] " . Text::printable($message) . "\n");
+      Out::write("  [$status] " . Text::printable($message) . "\n");
     };
     $ok = true;
     if ($data['files'] !== []) {
@@ -1455,7 +1488,7 @@ final class Rollback
     $log['ok'] = $ok;
     // Only a complete rollback closes the journal; a failed attempt is kept under its own name and may be repeated.
     Files::write($ok ? $logFile : $dir . '/rollback-attempt-' . date('Ymd-His') . '.json', Text::json($log), exclusive: true);
-    fwrite(STDOUT, "\nRückweg " . ($ok ? 'abgeschlossen' : 'unvollständig — Journal prüfen') . ".\n\n" . RESPONSIBILITY_NOTICE . "\n");
+    Out::write("\nRückweg " . ($ok ? 'abgeschlossen' : 'unvollständig — Journal prüfen') . ".\n" . TextRenderer::notices(null));
     return $ok ? 0 : 2;
   }
 }

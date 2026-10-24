@@ -1,48 +1,79 @@
-pg-harden 0.3.0 — Client-Prüfung auf b2f8fbb053b9, Konto root · Katalog: client 2026.10, postgresql 2026.10, system 2026.10
-Bestimmungsgemäße Verwendung: pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme bestimmt. Die Passwortprüfung
-liest pg_authid nur mit Superuser-Recht, rechnet eine kleine, fest umrissene Liste naheliegender Kandidaten
-sowie optional eine vom Betreiber bereitgestellte, auf 100 Einträge begrenzte Liste betriebsspezifischer
-Begriffe nach (keine Wörterbücher, kein Brute-Force), erzeugt keine Fehlanmeldungen und gibt nie ein
-Passwort aus — nur die Tatsache, dass eine Rolle einen Wert aus der Prüfliste verwendet. Der Client-Modus
-mit --user liest Dateien und Umgebungen anderer Benutzerkonten und setzt Administrator- bzw. root-Rechte und
-die Berechtigung voraus, diese Konten zu prüfen; gefundene Geheimnisse erscheinen nur mit Fundstelle und
-Zeile. Berichte können rollenbezogene und damit personenbeziehbare Befunde enthalten: vertraulich behandeln,
-nur zur Behebung verwenden, zeitnah löschen; wo Rollen Beschäftigten zugeordnet sind, Datenschutz und
-Mitbestimmung beachten. Eine Nutzung auf fremden Systemen oder Konten ohne Berechtigung ist bestimmungswidrig.
+pg-harden 0.3.0 · Client-Prüfung · 24.10.2026 21:06 (+00:00)
+Rechner       db28a0a55caa · Konto root
+Katalog       client 2026.10, postgresql 2026.10, system 2026.10 · Hinweise zu Verwendung und Gewähr am Ende
 
-== Client: Zugangsdaten ==
-[OK]            PGPASSWORD ist nicht in der Umgebung gesetzt  [client.env_pgpassword]
-[ÜBERSPRUNGEN]  Passwortdatei pgpass.conf ist nur für das Konto, SYSTEM und Administratoren lesbar  [client.pgpass_acl]
-                → nur windows
-[BEFUND]        Profile, Skripte, Compose-Dateien, Cron und Dienstdateien enthalten keine Klartext-Passwörter (hoch)  [client.secrets_in_files]
-                → Durchsucht: Profil-Dateien, systemweite Profile/Cron/Dienstdateien, Skripte/Compose/.env bis Tiefe 4 unter /root und --scan; Passwort-Muster: PGPASSWORD, Verbindungs-URI, POSTGRES_PASSWORD, password= in Verbindungszeichenfolgen
-                - /usr/local/bin/docker-ensure-initdb.sh:46: setzt PGPASSWORD (Wert wird nicht ausgegeben)
-                - /usr/local/bin/docker-entrypoint.sh:111: POSTGRES_PASSWORD im Klartext (Wert wird nicht ausgegeben)
-                - /usr/local/bin/docker-entrypoint.sh:133: POSTGRES_PASSWORD im Klartext (Wert wird nicht ausgegeben)
-                - /usr/local/bin/docker-entrypoint.sh:359: setzt PGPASSWORD (Wert wird nicht ausgegeben)
-[OK]            pg_service.conf enthält kein Passwort  [client.service_file_password]
-                → Keine pg_service.conf gefunden
-[OK]            Passwortdatei liegt nicht auf einer Netzfreigabe, in einem Cloud-Ordner oder einem Roaming-Profil  [client.pgpass_location]
-                → Keine Passwortdatei gefunden (/root/.pgpass)
-[OK]            Passwortdatei enthält keinen Superuser-Eintrag für beliebige Hosts  [client.pgpass_superuser]
-                → Keine Passwortdatei gefunden (/root/.pgpass)
-[OK]            Passwortdatei deckt localhost, 127.0.0.1 und ::1 gleichermaßen ab  [client.pgpass_loopback]
-                → Keine Passwortdatei gefunden (/root/.pgpass)
-[OK]            Passwortdatei enthält keine Zeile, die von einer früheren verdeckt wird  [client.pgpass_shadowed]
-                → Keine Passwortdatei gefunden (/root/.pgpass)
-[SICHTEN]       Passwortdatei .pgpass hat Modus 0600 (Hinweis)  [client.pgpass_mode]
-                → Keine Passwortdatei gefunden (/root/.pgpass)
+ZUSAMMENFASSUNG
+  1 Befund      1 hoch
+  8 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten · 1 übersprungen · 0 Fehler
 
-== Client: Zertifikate ==
-[OK]            Privater Client-Schlüssel ist nur für das Konto lesbar  [client.cert_key_permissions]
-                → Kein Client-Schlüssel gefunden
-[OK]            Client-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab  [client.cert_expiry]
-                → Kein Client-Zertifikat gefunden
+BEFUNDE — HOCH (1)
+  client.secrets_in_files       Profile, Skripte, Compose-Dateien, Cron und Dienstdateien enthalten keine
+                                Klartext-Passwörter
+                                → Durchsucht: Profil-Dateien, systemweite Profile/Cron/Dienstdateien,
+                                  Skripte/Compose/.env bis Tiefe 4 unter /root und --scan; Passwort-Muster:
+                                  PGPASSWORD, Verbindungs-URI, POSTGRES_PASSWORD, password= in
+                                  Verbindungszeichenfolgen
+                                - /usr/local/bin/docker-ensure-initdb.sh:46: setzt PGPASSWORD (Wert wird nicht
+                                  ausgegeben)
+                                - /usr/local/bin/docker-entrypoint.sh:111: POSTGRES_PASSWORD im Klartext (Wert
+                                  wird nicht ausgegeben)
+                                - /usr/local/bin/docker-entrypoint.sh:133: POSTGRES_PASSWORD im Klartext (Wert
+                                  wird nicht ausgegeben)
+                                - /usr/local/bin/docker-entrypoint.sh:359: setzt PGPASSWORD (Wert wird nicht
+                                  ausgegeben)
 
-== Zuordnung ISO/IEC 27001:2022 Annex A (Kennungen ungeprüft) ==
-Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber, ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
-5.17   Befund                     6 von 8  Authentisierungsinformationen
-8.24   ohne Befund                2 von 2  Verwendung von Kryptografie
+ZU SICHTEN (1)
+  client.pgpass_mode            Passwortdatei .pgpass hat Modus 0600 (Hinweis)
+                                → Keine Passwortdatei gefunden (/root/.pgpass)
 
-Ergebnis: 1 Befunde · 8 OK · 1 zu sichten · 1 übersprungen · 0 Fehler · 0 unvollständig
-Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.
+ÜBERSPRUNGEN (1)
+  client.pgpass_acl             Passwortdatei pgpass.conf ist nur für das Konto, SYSTEM und Administratoren
+                                lesbar
+                                → nur windows
+
+OHNE BEFUND (8)
+  client.env_pgpassword         PGPASSWORD ist nicht in der Umgebung gesetzt
+  client.service_file_password  pg_service.conf enthält kein Passwort
+                                → Keine pg_service.conf gefunden
+  client.pgpass_location        Passwortdatei liegt nicht auf einer Netzfreigabe, in einem Cloud-Ordner oder
+                                einem Roaming-Profil
+                                → Keine Passwortdatei gefunden (/root/.pgpass)
+  client.pgpass_superuser       Passwortdatei enthält keinen Superuser-Eintrag für beliebige Hosts
+                                → Keine Passwortdatei gefunden (/root/.pgpass)
+  client.pgpass_loopback        Passwortdatei deckt localhost, 127.0.0.1 und ::1 gleichermaßen ab
+                                → Keine Passwortdatei gefunden (/root/.pgpass)
+  client.pgpass_shadowed        Passwortdatei enthält keine Zeile, die von einer früheren verdeckt wird
+                                → Keine Passwortdatei gefunden (/root/.pgpass)
+  client.cert_key_permissions   Privater Client-Schlüssel ist nur für das Konto lesbar
+                                → Kein Client-Schlüssel gefunden
+  client.cert_expiry            Client-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab
+                                → Kein Client-Zertifikat gefunden
+
+ZUORDNUNG ISO/IEC 27001:2022 ANNEX A — Kennungen ungeprüft
+  Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber,
+  ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
+
+  Kennung  Ergebnis der Regeln         ohne Befund  Thema
+  5.17     Befund                      6 von 8      Authentisierungsinformationen
+  8.24     ohne Befund                 2 von 2      Verwendung von Kryptografie
+
+Ergebnis: 1 Befund (1 hoch) · 8 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten ·
+  1 übersprungen · 0 Fehler
+
+── Hinweise ──────────────────────────────────────────────────────────────────────────────────────────────────
+Bestimmungsgemäße Verwendung: pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme
+bestimmt. Die Passwortprüfung liest pg_authid nur mit Superuser-Recht, rechnet eine kleine, fest umrissene
+Liste naheliegender Kandidaten sowie optional eine vom Betreiber bereitgestellte, auf 100 Einträge begrenzte
+Liste betriebsspezifischer Begriffe nach (keine Wörterbücher, kein Brute-Force), erzeugt keine Fehlanmeldungen
+und gibt nie ein Passwort aus — nur die Tatsache, dass eine Rolle einen Wert aus der Prüfliste verwendet. Der
+Client-Modus mit --user liest Dateien und Umgebungen anderer Benutzerkonten und setzt Administrator- bzw.
+root-Rechte und die Berechtigung voraus, diese Konten zu prüfen; gefundene Geheimnisse erscheinen nur mit
+Fundstelle und Zeile. Berichte können rollenbezogene und damit personenbeziehbare Befunde enthalten:
+vertraulich behandeln, nur zur Behebung verwenden, zeitnah löschen; wo Rollen Beschäftigten zugeordnet sind,
+Datenschutz und Mitbestimmung beachten. Eine Nutzung auf fremden Systemen oder Konten ohne Berechtigung ist
+bestimmungswidrig.
+
+Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung
+selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des
+Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────

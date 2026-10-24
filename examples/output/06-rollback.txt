@@ -1,3 +1,8 @@
+pg-harden 0.3.0 · rollback · 24.10.2026 21:06 (+00:00)
+Server        127.0.0.1:5432 · PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) · Benutzer postgres
+Journal       /root/journal (apply vom 24.10.2026 21:06 (+00:00))
+
+SCHRITTE
   [OK] 3 Datei(en) zurückgespielt
   [OK] Konfiguration neu geladen
   [OK] neue Anmeldung funktioniert
@@ -5,4 +10,8 @@
 
 Rückweg abgeschlossen.
 
-Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.
+── Hinweise ──────────────────────────────────────────────────────────────────────────────────────────────────
+Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung
+selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des
+Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────

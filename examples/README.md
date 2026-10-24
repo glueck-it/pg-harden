@@ -11,7 +11,7 @@ These reports are published only because the instance is fictional. Real reports
 
 | File | What it shows |
 |---|---|
-| [`01-check.txt`](output/01-check.txt) | `check` — the report in the terminal: findings per category, then the ISO 27001 overview and the summary line |
+| [`01-check.txt`](output/01-check.txt) | `check` — the report in the terminal: header and summary, findings by severity (high → low), rules to review, incomplete and clean rules, the ISO 27001 overview, and the notices at the end |
 | [`01-check.html`](output/01-check.html) | the same report as HTML (download and open in a browser) |
 | [`02-plan.txt`](output/02-plan.txt) | `plan` — writes the change plan as files, changes nothing on the server |
 | [`02-plan/90-pg-harden.conf`](output/02-plan/90-pg-harden.conf) | parameters for `conf.d`; `#BESTÄTIGEN` lines are commented out until you enable them |
@@ -46,7 +46,7 @@ Diese Berichte sind nur veröffentlicht, weil die Instanz fiktiv ist. Echte Beri
 
 | Datei | Was sie zeigt |
 |---|---|
-| [`01-check.txt`](output/01-check.txt), [`01-check.html`](output/01-check.html) | `check` — Bericht mit Befunden je Kategorie, ISO-27001-Übersicht und Ergebniszeile (HTML herunterladen und im Browser öffnen) |
+| [`01-check.txt`](output/01-check.txt), [`01-check.html`](output/01-check.html) | `check` — Kopf und Zusammenfassung, Befunde nach Schwere (hoch → niedrig), zu Sichtendes, Unvollständiges, Regeln ohne Befund, ISO-27001-Übersicht und Hinweise am Ende (HTML herunterladen und im Browser öffnen) |
 | [`02-plan.txt`](output/02-plan.txt), [`02-plan/`](output/02-plan/) | `plan` — Änderungsplan als Dateien: `90-pg-harden.conf`, `harden_<db>.sql` mit Rückweg je Korrektur (Korrekturen der Stufe `confirm` als `-- BESTÄTIGEN:` auskommentiert), `MANUELL.md` (von Hand oder mit `apply --include-confirm` zu erledigen), `report.json` |
 | [`03-apply-dry-run.txt`](output/03-apply-dry-run.txt) | `apply` ohne `--execute` — was geschähe, nichts geändert |
 | [`04-apply.txt`](output/04-apply.txt), [`04-apply-log.json`](output/04-apply-log.json), [`04-journal-files.txt`](output/04-journal-files.txt), [`04-written-90-pg-harden.conf`](output/04-written-90-pg-harden.conf) | `apply --execute` — Prüfung durch den Server, Neuladen, Anmeldetest, SQL, Vorher/Nachher-Vergleich und das Journal |

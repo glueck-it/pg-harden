@@ -12,8 +12,8 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
 ## Ergebnis
 
 - **Kein Fehlerstatus** in `check` auf keiner Version; die Fehlerausgabe ist überall leer.
-- **Regressionsläufe** (`tests/lab-matrix.sh`, T1–T11: `apply`/`rollback` von Konfiguration, `pg_hba.conf` mit Aussperrschutz, SQL,
-  manipuliertes Journal, entfernte Verbindung, Katalog-Sichtbarkeit) und **Sichtbarkeitsprobe** (`tests/lab-visibility.sh`) liefern auf
+- **Regressionsläufe** (`tests/lab-matrix.sh`, T1–T12: `apply`/`rollback` von Konfiguration, `pg_hba.conf` mit Aussperrschutz, SQL,
+  manipuliertes Journal, entfernte Verbindung, Katalog-Sichtbarkeit, `rollback` mit geschlossener Ausgabe) und **Sichtbarkeitsprobe** (`tests/lab-visibility.sh`) liefern auf
   allen sechs Versionen dasselbe Ergebnis — bis auf eine Abweichung in T7: in 14 braucht `db.public_schema_create` eine zusätzliche
   Anweisung (siehe die Tabelle unten, Zeile `db.public_schema_create`).
 - **`pg_upgrade` und Wiederherstellung** (`tests/lab-upgrade.sh`, nicht Teil der Matrix, einzeln gelaufen): Der Entzug aus

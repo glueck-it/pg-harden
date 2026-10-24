@@ -1,3 +1,4 @@
+Kennung                         Schwere  Stufe    Titel
 client.service_file_password    hoch     manual   pg_service.conf enthält kein Passwort
 client.pgpass_acl               hoch     manual   Passwortdatei pgpass.conf ist nur für das Konto, SYSTEM und Administratoren lesbar
 client.pgpass_mode              Info     manual   Passwortdatei .pgpass hat Modus 0600 (Hinweis)

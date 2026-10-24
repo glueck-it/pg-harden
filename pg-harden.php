@@ -42,7 +42,7 @@ require_once __DIR__ . '/src/Os.php';
 require_once __DIR__ . '/src/Client.php';
 require_once __DIR__ . '/src/Apply.php';
 
-/** Verbatim from the concept ("Rechtlicher Rahmen und bestimmungsgemäße Verwendung"); same text in README, --help and report header. */
+/** Verbatim from the concept ("Rechtlicher Rahmen und bestimmungsgemäße Verwendung"); same text in README, --help and the notices block at the end of the report. */
 const LEGAL_NOTICE = 'pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme bestimmt. '
   . 'Die Passwortprüfung liest pg_authid nur mit Superuser-Recht, rechnet eine kleine, fest umrissene Liste '
   . 'naheliegender Kandidaten sowie optional eine vom Betreiber bereitgestellte, auf 100 Einträge begrenzte Liste '
@@ -66,6 +66,25 @@ const RESPONSIBILITY_NOTICE = 'Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pl
   . 'Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.';
 
 final class HardenException extends RuntimeException {}
+
+/**
+ * Output of the writing commands (apply, rollback). A closed reader (… | head) must never stop them halfway — a rollback
+ * killed between "file restored" and "reloaded" leaves the server running on a configuration that is no longer on disk.
+ * Writes therefore fail quietly — on stdout and stderr; SIGPIPE is ignored in App::main where pcntl exists (Windows has no SIGPIPE).
+ * Read-only commands go through the same path, so "check | head" ends with the exit code of the check, not with an error.
+ */
+final class Out
+{
+  public static function write(string $s): void
+  {
+    @fwrite(STDOUT, $s);
+  }
+
+  public static function err(string $s): void
+  {
+    @fwrite(STDERR, $s);
+  }
+}
 
 /** Everything that comes from the server is untrusted text: names may contain any character except NUL. */
 final class Text
@@ -1322,6 +1341,24 @@ final class Report
     return $results;
   }
 
+  /** Findings first (most severe first), then errors, rules to review, incomplete, skipped, clean; within that the catalog order. */
+  public static function byAttention(array $results): array
+  {
+    $rank = fn(array $r) => match (true) {
+      $r['status'] === 'fail' => 0,
+      $r['status'] === 'error' => 1,
+      $r['status'] === 'info' => 2,
+      $r['status'] === 'pass' && $r['incomplete'] => 3,
+      $r['status'] === 'skip' => 4,
+      default => 5,
+    };
+    $sorted = self::sorted($results);
+    $pos = array_flip(array_column($sorted, 'id'));
+    usort($sorted, fn($a, $b) => [$rank($a), $a['status'] === 'fail' ? self::SEVERITY_ORDER[$a['severity']] : 0, $pos[$a['id']]]
+      <=> [$rank($b), $b['status'] === 'fail' ? self::SEVERITY_ORDER[$b['severity']] : 0, $pos[$b['id']]]);
+    return $sorted;
+  }
+
   public static function findingLine(array $f): string
   {
     return ($f['database'] !== null ? '[' . Text::printable($f['database']) . '] ' : '')
@@ -1331,69 +1368,168 @@ final class Report
 
 final class TextRenderer
 {
+  /** Line width of the terminal report; long titles and findings wrap with a hanging indent. */
+  public const WIDTH = 110;
+  /** Column of the rule title: two spaces, the rule id padded to 29, one space. */
+  private const INDENT = 32;
+
   public static function render(array $report): string
   {
     $m = $report['meta'];
     $c = $m['counts'];
     $client = ($m['mode'] ?? 'server') === 'client';
+    $kind = $client ? 'Client-Prüfung' : (isset($report['comparison']) ? 'Prüfbericht mit Vergleich' : 'Prüfbericht');
+    $out = 'pg-harden ' . PG_HARDEN_VERSION . " · $kind · " . self::when($m['created_at'] ?? '') . "\n";
     if ($client) {
-      $out = 'pg-harden ' . PG_HARDEN_VERSION . ' — Client-Prüfung auf ' . Text::printable($m['server']) . ', Konto ' . Text::printable($m['user']) . " · Katalog: {$m['catalog']}
-";
+      $out .= self::field('Rechner', Text::printable($m['server']) . ' · Konto ' . Text::printable($m['user']));
     } else {
-      $out = 'pg-harden ' . PG_HARDEN_VERSION . ' — ' . Text::printable($m['server']) . ', PostgreSQL ' . Text::printable($m['server_version'])
-        . ', Benutzer ' . Text::printable($m['user']) . ($m['superuser'] ? ' (Superuser)' : '') . ', Verbindung ' . ($m['ssl'] ? 'TLS' : 'ohne TLS') . "
-";
-      $out .= 'Betriebssystem-Regeln: ' . ($m['local_server'] ? 'Server läuft auf diesem Rechner — geprüft' : 'nicht geprüft — ' . Text::printable($m['local_note'])) . "
-";
-    }
-    if (($m['legal_notice'] ?? null) !== null) {
-      $out .= "Bestimmungsgemäße Verwendung: " . wordwrap($m['legal_notice'], 110) . "
-";
-    }
-    if (!$client) {
-      if ($m['remote'] && !$m['certificate_verified']) {
-        $out .= "Hinweis: Serverzertifikat nicht geprüft — für entfernte Hosts --sslmode=verify-full verwenden.
-";
-      }
-      $out .= 'Datenbanken: ' . Text::printable(implode(', ', $m['databases'])) . " · Katalog: {$m['catalog']}
-";
+      $out .= self::field('Server', Text::printable($m['server']) . ' · PostgreSQL ' . Text::printable($m['server_version'])
+        . ' · Benutzer ' . Text::printable($m['user']) . ($m['superuser'] ? ' (Superuser)' : '') . ' · ' . ($m['ssl'] ? 'TLS' : 'ohne TLS'));
+      $out .= self::field('Umfang', 'Datenbanken ' . Text::printable(implode(', ', $m['databases'])) . ' · Betriebssystem-Regeln '
+        . ($m['local_server'] ? 'geprüft' : 'nicht geprüft (' . Text::printable($m['local_note']) . ')'));
       foreach ($m['refused_databases'] as $db => $reason) {
-        $out .= 'Nicht geprüft: ' . Text::printable((string) $db) . " — $reason
-";
+        $out .= self::field('Nicht geprüft', Text::printable((string) $db) . " — $reason");
+      }
+      if ($m['remote'] && !$m['certificate_verified']) {
+        $out .= self::field('Achtung', 'Serverzertifikat nicht geprüft — für entfernte Hosts --sslmode=verify-full verwenden');
       }
     }
-    $category = '';
+    $out .= self::field('Katalog', Text::printable((string) $m['catalog']) . ' · '
+      . (($m['legal_notice'] ?? null) !== null ? 'Hinweise zu Verwendung und Gewähr am Ende' : 'Hinweis zur Gewähr am Ende'));
+
+    $bySeverity = array_fill_keys(array_keys(Report::SEVERITY_ORDER), []);
+    $groups = ['error' => [], 'info' => [], 'incomplete' => [], 'skip' => [], 'pass' => []];
     foreach (Report::sorted($report['results']) as $r) {
-      if ($r['category'] !== $category) {
-        $category = $r['category'];
-        $out .= "\n== $category ==\n";
-      }
-      $label = mb_str_pad('[' . Report::STATUS_LABEL[$r['status']] . ']', 15);
-      $sev = $r['status'] === 'fail' ? ' (' . Report::SEVERITY_LABEL[$r['severity']] . ')' : '';
-      $out .= "$label {$r['title']}$sev  [{$r['id']}]" . ($r['incomplete'] && $r['status'] !== 'skip' ? '  — unvollständig' : '') . "\n";
-      foreach ($r['notes'] as $note) {
-        $out .= str_repeat(' ', 16) . '→ ' . Text::printable($note) . "\n";
-      }
-      foreach ($r['findings'] as $f) {
-        $out .= str_repeat(' ', 16) . '- ' . Report::findingLine($f) . "\n";
+      match (true) {
+        $r['status'] === 'fail' => $bySeverity[$r['severity']][] = $r,
+        $r['status'] === 'pass' && $r['incomplete'] => $groups['incomplete'][] = $r,
+        default => $groups[$r['status']][] = $r,
+      };
+    }
+    $severities = [];
+    foreach ($bySeverity as $sev => $list) {
+      if ($list !== []) {
+        $severities[] = count($list) . ' ' . Report::SEVERITY_LABEL[$sev];
       }
     }
+    // The same numbers as the sections below: "ohne Befund" counts only fully checked rules.
+    $rest = count($groups['pass']) . ' ohne Befund · ' . count($groups['incomplete']) . ' ohne Befund, aber nicht vollständig geprüft · '
+      . "{$c['info']} zu sichten · {$c['skip']} übersprungen · {$c['error']} Fehler";
+    $out .= "\nZUSAMMENFASSUNG\n";
+    $out .= '  ' . mb_str_pad(self::findings($c['fail']), 14) . ($severities === [] ? '' : implode(' · ', $severities)) . "\n";
+    $out .= '  ' . self::wrap($rest, 2) . "\n";
+
+    if (isset($report['comparison'])) {
+      $out .= Verifier::renderText($report['comparison']);
+    }
+    foreach ($bySeverity as $sev => $list) {
+      if ($list !== []) {
+        $out .= "\nBEFUNDE — " . mb_strtoupper(Report::SEVERITY_LABEL[$sev]) . ' (' . count($list) . ")\n" . implode('', array_map(self::item(...), $list));
+      }
+    }
+    $titles = [
+      'error' => 'FEHLER BEI DER PRÜFUNG',
+      'info' => 'ZU SICHTEN',
+      'incomplete' => 'OHNE BEFUND, ABER NICHT VOLLSTÄNDIG GEPRÜFT',
+      'skip' => 'ÜBERSPRUNGEN',
+      'pass' => 'OHNE BEFUND',
+    ];
+    foreach ($titles as $key => $title) {
+      if ($groups[$key] !== []) {
+        $out .= "\n$title (" . count($groups[$key]) . ")\n" . implode('', array_map(self::item(...), $groups[$key]));
+      }
+    }
+
     foreach ($report['mappings'] as $map) {
       if ($map['controls'] === []) {
         continue;
       }
-      $out .= "\n== Zuordnung {$map['framework']}" . ($map['verified'] ? '' : ' (Kennungen ungeprüft)') . " ==\n";
-      $out .= MAPPING_DISCLAIMER . "\n";
+      $out .= "\nZUORDNUNG " . mb_strtoupper(Text::printable($map['framework'])) . ($map['verified'] ? '' : ' — Kennungen ungeprüft') . "\n";
+      $out .= '  ' . self::wrap(MAPPING_DISCLAIMER, 2) . "\n\n";
+      $out .= '  ' . mb_str_pad('Kennung', 9) . mb_str_pad('Ergebnis der Regeln', 28) . mb_str_pad('ohne Befund', 13) . "Thema\n";
       foreach ($map['controls'] as $ctl) {
-        $out .= mb_str_pad($ctl['control'], 7) . mb_str_pad($ctl['state'], 27) . mb_str_pad($ctl['rules_clean'], 9) . $ctl['title'] . "\n";
+        $out .= '  ' . mb_str_pad($ctl['control'], 9) . mb_str_pad($ctl['state'], 28) . mb_str_pad($ctl['rules_clean'], 13) . $ctl['title'] . "\n";
       }
     }
-    if (isset($report['comparison'])) {
-      $out .= Verifier::renderText($report['comparison']);
+
+    $out .= "\n" . self::wrap('Ergebnis: ' . self::findings($c['fail']) . ($severities === [] ? '' : ' (' . implode(' · ', $severities) . ')') . " · $rest", 2) . "\n";
+    return $out . self::notices($m['legal_notice'] ?? null);
+  }
+
+  /** One rule: id column, title, then notes (→) and findings (-) aligned under the title. */
+  public static function item(array $r): string
+  {
+    $pad = str_repeat(' ', self::INDENT);
+    $title = $r['title'] . ($r['incomplete'] && $r['status'] === 'fail' ? ' — nicht vollständig geprüft' : '');
+    $out = '  ' . mb_str_pad($r['id'], self::INDENT - 3) . ' ' . self::wrap($title, self::INDENT) . "\n";
+    foreach ($r['notes'] as $note) {
+      $out .= $pad . '→ ' . self::wrap(Text::printable($note), self::INDENT + 2) . "\n";
     }
-    $out .= "\nErgebnis: {$c['fail']} Befunde · {$c['pass']} OK · {$c['info']} zu sichten · {$c['skip']} übersprungen · "
-      . "{$c['error']} Fehler · {$c['incomplete']} unvollständig\n" . RESPONSIBILITY_NOTICE . "\n";
+    foreach ($r['findings'] as $f) {
+      $out .= $pad . '- ' . self::wrap(Report::findingLine($f), self::INDENT + 2) . "\n";
+    }
     return $out;
+  }
+
+  /** The closing block: intended-use notice (when the report carries it) and the responsibility notice, set off from the report. */
+  public static function notices(?string $legal): string
+  {
+    $out = "\n" . self::rule('Hinweise');
+    if ($legal !== null) {
+      $out .= self::wrap('Bestimmungsgemäße Verwendung: ' . $legal, 0) . "\n\n";
+    }
+    return $out . self::wrap(RESPONSIBILITY_NOTICE, 0) . "\n" . self::rule();
+  }
+
+  /** Label column for the header lines. */
+  public static function field(string $label, string $value): string
+  {
+    return mb_str_pad($label, 14) . self::wrap($value, 14) . "\n";
+  }
+
+  /**
+   * Word wrap with a hanging indent: the first line starts where the caller already is, every further line at $indent.
+   * Measured in characters, not bytes (wordwrap() counts bytes, every umlaut would shorten the line); breaks only at spaces,
+   * an overlong word stays whole.
+   */
+  public static function wrap(string $text, int $indent): string
+  {
+    $width = max(40, self::WIDTH - $indent);
+    $lines = [];
+    $line = '';
+    foreach (explode(' ', $text) as $word) {
+      if ($line !== '' && mb_strlen($line) + 1 + mb_strlen($word) > $width) {
+        $lines[] = $line;
+        $line = $word;
+      } else {
+        $line = $line === '' ? $word : "$line $word";
+      }
+    }
+    $lines[] = $line;
+    return implode("\n" . str_repeat(' ', $indent), $lines);
+  }
+
+  /** "1 Befund", "3 Befunde". */
+  public static function findings(int $n): string
+  {
+    return $n . ($n === 1 ? ' Befund' : ' Befunde');
+  }
+
+  public static function rule(string $title = ''): string
+  {
+    $head = $title === '' ? '' : "── $title ";
+    return $head . str_repeat('─', max(3, self::WIDTH - mb_strlen($head))) . "\n";
+  }
+
+  /** "2026-10-24T20:25:03+00:00" (also with fractions) → "24.10.2026 20:25 (+00:00)"; anything unparsable is shown as it is. */
+  public static function when(string $atom): string
+  {
+    try {
+      $d = new DateTimeImmutable($atom);
+    } catch (Exception) {
+      return Text::printable($atom);
+    }
+    return $atom === '' ? '' : $d->format('d.m.Y H:i') . ' (' . $d->format('P') . ')';
   }
 }
 
@@ -1405,7 +1541,7 @@ final class HtmlRenderer
     $m = $report['meta'];
     $c = $m['counts'];
     $rows = '';
-    foreach (Report::sorted($report['results']) as $r) {
+    foreach (Report::byAttention($report['results']) as $r) {
       $items = '';
       foreach ($r['findings'] as $f) {
         $items .= '<li>' . $e(Report::findingLine($f)) . '</li>';
@@ -1443,6 +1579,9 @@ final class HtmlRenderer
       : "PostgreSQL {$e($m['server_version'])} · Benutzer {$e($m['user'])} · Verbindung {$ssl} · {$e($m['created_at'])} · {$e($m['tool'])} · Katalog {$e($m['catalog'])}";
     $legal = ($m['legal_notice'] ?? null) !== null
       ? '<p class="note"><strong>Bestimmungsgemäße Verwendung:</strong> ' . $e($m['legal_notice']) . '</p>' : '';
+    $noticeRef = $legal !== '' ? 'Hinweise zu Verwendung und Gewähr am Ende.' : 'Hinweis zur Gewähr am Ende.';
+    $passClean = count(array_filter($report['results'], fn($r) => $r['status'] === 'pass' && !$r['incomplete']));
+    $passIncomplete = count(array_filter($report['results'], fn($r) => $r['status'] === 'pass' && $r['incomplete']));
     return <<<HTML
       <!doctype html>
       <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1458,11 +1597,13 @@ final class HtmlRenderer
       </style></head><body>
       <h1>{$e($title)}</h1>
       <p>{$headline}</p>
-      <p><strong>{$c['fail']} Befunde</strong> · {$c['pass']} OK · {$c['info']} zu sichten · {$c['skip']} übersprungen · {$c['error']} Fehler · {$c['incomplete']} unvollständig</p>
-      {$legal}
-      <p class="note">Der Bericht enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen.</p>
+      <p><strong>{$e(TextRenderer::findings($c['fail']))}</strong> · {$passClean} ohne Befund · {$passIncomplete} ohne Befund, aber nicht vollständig geprüft · {$c['info']} zu sichten · {$c['skip']} übersprungen · {$c['error']} Fehler</p>
+      <p class="note">Der Bericht enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen. {$noticeRef}</p>
+      {$cmp}
       <table><thead><tr><th>Status</th><th>Stufe</th><th>Bereich</th><th>Regel</th></tr></thead><tbody>{$rows}</tbody></table>
-      {$maps}{$cmp}
+      {$maps}
+      <h2>Hinweise</h2>
+      {$legal}
       <p class="note">{$e(RESPONSIBILITY_NOTICE)}</p>
       </body></html>
       HTML;
@@ -1755,7 +1896,7 @@ final class Verifier
           continue;
         }
         foreach ($r['findings'] as $f) {
-          $set[$key($r, $f)] = ['rule' => $r['id'], 'title' => $r['title'], 'object' => $f['object'], 'database' => $f['database'] ?? null];
+          $set[$key($r, $f)] = ['rule' => $r['id'], 'title' => $r['title'], 'severity' => $r['severity'] ?? null, 'object' => $f['object'], 'database' => $f['database'] ?? null];
         }
       }
       return $set;
@@ -1803,14 +1944,38 @@ final class Verifier
 
   public static function renderText(array $diff): string
   {
-    $line = fn($x) => '  - ' . Text::printable($x['title']) . ' [' . Text::printable($x['rule']) . ']: '
-      . ($x['database'] !== null ? '[' . Text::printable($x['database']) . '] ' : '') . Text::printable($x['object']) . "\n";
-    $out = "\n== Vergleich mit Bericht vom " . Text::printable($diff['previous_created_at']) . " ==\n";
+    $labels = [
+      'fixed' => 'Behoben',
+      'new' => 'Neu',
+      'open' => 'Weiter offen',
+      'not_comparable' => 'Nicht vergleichbar (diesmal nicht erneut geprüft)',
+    ];
+    $out = "\nVERGLEICH MIT DEM BERICHT VOM " . TextRenderer::when((string) $diff['previous_created_at']) . "\n";
     foreach ($diff['warnings'] as $w) {
-      $out .= 'ACHTUNG: ' . Text::printable($w) . "\n";
+      $out .= '  ACHTUNG: ' . TextRenderer::wrap(Text::printable($w), 11) . "\n";
     }
-    foreach (['fixed' => 'Behoben', 'new' => 'Neu', 'open' => 'Weiter offen', 'not_comparable' => 'Nicht vergleichbar (diesmal nicht erneut geprüft)'] as $k => $label) {
-      $out .= "\n$label (" . count($diff[$k]) . "):\n" . implode('', array_map($line, $diff[$k]));
+    $out .= '  ' . implode(' · ', array_map(fn($k) => $labels[$k] . ' ' . count($diff[$k]), array_keys($labels))) . "\n";
+    foreach ($labels as $k => $label) {
+      if ($diff[$k] === []) {
+        continue;
+      }
+      $items = $diff[$k];
+      // Most severe first, then by rule: the same order as the findings in the report.
+      usort($items, fn($a, $b) => [Report::SEVERITY_ORDER[$a['severity'] ?? 'info'] ?? 3, $a['rule']]
+        <=> [Report::SEVERITY_ORDER[$b['severity'] ?? 'info'] ?? 3, $b['rule']]);
+      $out .= "\n  $label (" . count($items) . ")\n";
+      // One line per rule, its places side by side (hba.trust: Zeile 117, Zeile 119, …).
+      $byRule = [];
+      foreach ($items as $x) {
+        $byRule[$x['rule']]['severity'] ??= $x['severity'] ?? '';
+        $byRule[$x['rule']]['title'] ??= $x['title'] ?? '';
+        $byRule[$x['rule']]['where'][] = ($x['database'] !== null ? '[' . Text::printable($x['database']) . '] ' : '') . Text::printable($x['object']);
+      }
+      foreach ($byRule as $rule => $g) {
+        $out .= '    ' . mb_str_pad(Report::SEVERITY_LABEL[$g['severity']] ?? '', 8) . mb_str_pad(Text::printable((string) $rule), 29) . ' '
+          . TextRenderer::wrap(Text::printable($g['title']), 42) . "\n"
+          . str_repeat(' ', 42) . '- ' . TextRenderer::wrap(implode(', ', $g['where']), 44) . "\n";
+      }
     }
     return $out;
   }
@@ -1821,6 +1986,10 @@ final class App
   public static function main(array $argv): int
   {
     umask(0077);
+    // A closed output pipe must not kill a writing command halfway (see Out).
+    if (function_exists('pcntl_signal') && defined('SIGPIPE')) {
+      pcntl_signal(SIGPIPE, SIG_IGN);
+    }
     // Stack traces carry arguments (stored password verifiers, candidates): keep them out of every output.
     ini_set('display_errors', 'stderr');
     ini_set('zend.exception_ignore_args', '1');
@@ -1857,7 +2026,7 @@ final class App
         default => throw new HardenException('Unbekannter Befehl ' . Text::printable($opt->command)),
       };
     } catch (Throwable $e) {
-      fwrite(STDERR, 'pg-harden: ' . Text::printable(strtok($e->getMessage(), "\n") ?: get_class($e)) . "\n");
+      Out::err('pg-harden: ' . Text::printable(strtok($e->getMessage(), "\n") ?: get_class($e)) . "\n");
       return 2;
     }
   }
@@ -1883,8 +2052,8 @@ final class App
     $connector = new Connector($opt);
     $report = self::runCheck($connector, $opt, $catalog);
     $files = (new Planner($connector, $catalog))->write($report, $dir);
-    fwrite(STDOUT, TextRenderer::render($report));
-    fwrite(STDOUT, "\nPlan geschrieben (nichts ausgeführt):\n  " . implode("\n  ", $files) . "\n\n" . RESPONSIBILITY_NOTICE . "\n");
+    Out::write(TextRenderer::render($report));
+    Out::write("\nPlan geschrieben (nichts ausgeführt):\n  " . implode("\n  ", $files) . "\n");
     return Report::exitCode($report);
   }
 
@@ -1925,11 +2094,12 @@ final class App
 
   private static function rules(Catalog $catalog): int
   {
+    Out::write(mb_str_pad('Kennung', 32) . mb_str_pad('Schwere', 9) . mb_str_pad('Stufe', 9) . "Titel\n");
     foreach ($catalog->rules as $rule) {
-      fwrite(STDOUT, mb_str_pad($rule->id(), 32) . mb_str_pad(Report::SEVERITY_LABEL[$rule->severity()], 9)
+      Out::write(mb_str_pad($rule->id(), 32) . mb_str_pad(Report::SEVERITY_LABEL[$rule->severity()], 9)
         . mb_str_pad($rule->automation(), 9) . $rule->title() . "\n");
     }
-    fwrite(STDOUT, "\n" . count($catalog->rules) . " Regeln · Katalog {$catalog->version}\n");
+    Out::write("\n" . count($catalog->rules) . " Regeln · Katalog {$catalog->version}\n");
     return 0;
   }
 
@@ -1944,9 +2114,9 @@ final class App
     $out = $opt->get('out');
     if ($out !== null) {
       Files::write($out, $content);
-      fwrite(STDOUT, "Bericht geschrieben: $out (" . $report['meta']['counts']['fail'] . " Befunde)\n");
+      Out::write("Bericht geschrieben: $out (" . TextRenderer::findings($report['meta']['counts']['fail']) . ")\n");
     } else {
-      fwrite(STDOUT, $content);
+      Out::write($content);
     }
   }
 
@@ -1955,7 +2125,7 @@ final class App
     $version = PG_HARDEN_VERSION;
     $notice = wordwrap(RESPONSIBILITY_NOTICE, 100);
     $legal = wordwrap(LEGAL_NOTICE, 100);
-    fwrite(STDOUT, <<<TXT
+    Out::write(<<<TXT
       pg-harden {$version} — prüft PostgreSQL gegen einen Regelkatalog, schreibt Änderungsvorschläge, vergleicht Berichte.
       check, plan, verify, client und rules schreiben nichts auf den Server. apply und rollback verändern ihn nur mit
       ausdrücklichem --execute (bzw. gegen ein Journal) — mit Sicherung, Prüfung durch den Server und Anmeldetest.
