@@ -39,8 +39,7 @@ This English README is a condensed version of [README.de.md](README.de.md), whic
 > accounts without authorization is contrary to the intended use.
 
 *The wording of these two notices ("Intended use" and "Check it yourself — no warranty") is a translation. The original German text is shown by
-`--help` and at the top of every report that contains password or client results; the tool's own output is in German. In case of doubt, the
-German original prevails.*
+`--help` and at the top of every report that contains password or client results; the tool's own output is in German.*
 
 ## Check it yourself — no warranty
 
@@ -295,9 +294,6 @@ pseudonymization of reports, BSI identifiers, OSCAL, English output texts. See [
 MIT License, Copyright (c) 2026 Frank Glück (Glück IT) — see [LICENSE](LICENSE). It covers code, rule catalog and mappings; they contain original
 texts, the identifiers of the standards and original short titles in the spirit of them, but no standard or CIS texts. Mandatory statutory
 liability (in particular for intent, fraud, injury to life, body and health, and under the Product Liability Act) remains unaffected.
-
-pg-harden is an independent tool and is not affiliated with the PostgreSQL project or the PostgreSQL Community Association. PostgreSQL, Docker,
-Debian, Windows and other names mentioned are trademarks of their respective owners and are used here only to identify the products concerned, not to suggest any affiliation or endorsement.
 
 ## About the author
 

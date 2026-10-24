@@ -308,10 +308,6 @@ MIT-Lizenz, Copyright (c) 2026 Frank Glück (Glück IT) — siehe [LICENSE](LICE
 Zuordnungen; sie enthalten eigene Texte, die Kennungen der Normen und eigene Kurztitel in Anlehnung daran, aber
 keine Norm- oder CIS-Texte. Zwingende gesetzliche Haftung (insbesondere für Vorsatz, Arglist, die Verletzung von Leben, Körper und Gesundheit sowie nach dem Produkthaftungsgesetz) bleibt unberührt.
 
-pg-harden ist ein unabhängiges Werkzeug und steht in keiner Verbindung zum PostgreSQL-Projekt oder zur PostgreSQL Community Association.
-PostgreSQL, Docker, Debian, Windows und weitere genannte Namen sind Marken ihrer jeweiligen Inhaber und werden hier nur zur Bezeichnung der
-betreffenden Produkte verwendet, ohne eine Verbindung oder Billigung nahezulegen.
-
 ## Verwandte Projekte und Schulungen
 
 - **[pg-clusterbackup](https://github.com/glueck-it/pg-clusterbackup)** — sichert jede Datenbank jedes laufenden PostgreSQL-Clusters in einem
