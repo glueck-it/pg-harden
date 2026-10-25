@@ -13,6 +13,9 @@ declare(strict_types=1);
 /** Filesystem functions warn on failure and the global error handler turns warnings into exceptions. */
 final class Fs
 {
+  /** Set when becomeRoot failed: the shutdown handler must not restore anything in a foreign identity. */
+  public static bool $identityLost = false;
+
   public static function attempt(callable $fn): mixed
   {
     try {
@@ -35,44 +38,165 @@ final class Fs
     if ($real === null) {
       return null;
     }
-    $real = str_replace('\\', '/', $real);
-    return Platform::windows() ? strtolower($real) : $real;
+    // Only Windows uses "\" as a separator; elsewhere it is an ordinary character in a name.
+    return Platform::windows() ? strtolower(str_replace('\\', '/', $real)) : $real;
   }
 
   /**
-   * Runs $fn with the identity of the file's owner when this process is root and the owner is somebody else
-   * (the service account). A symlink planted by that account can then only reach what that account can reach —
-   * root never follows it. Elsewhere (Windows, not root, owner is root) the function simply runs.
+   * Runs $fn as root only where nobody else can change the way to $path, otherwise with the identity of the account
+   * that can (the service account, see writerFor). A symlink or renamed directory planted by that account — even
+   * between check and write — then only reaches what that account can reach; root does not follow it. Elsewhere
+   * (Windows, not root) the function simply runs — which also makes a nested call inside a switched identity run
+   * in that identity unchanged (euid is no longer 0), so it never switches back to root early.
    */
   public static function asOwnerOf(string $path, callable $fn): mixed
   {
     if (Platform::windows() || !function_exists('posix_geteuid') || posix_geteuid() !== 0) {
       return $fn();
     }
-    // lstat: the owner of a symlink itself decides, not the owner of its target. Unknown owner: do not run as root.
-    $st = self::attempt(fn() => lstat($path)) ?? self::attempt(fn() => stat(dirname($path)));
+    $st = self::writerFor($path);
     if ($st === null) {
-      throw new HardenException('Besitzer von ' . Text::printable($path) . ' ist nicht ermittelbar — nichts geändert.');
-    }
-    if ($st['uid'] === 0) {
       return $fn();
     }
-    if (!posix_setegid($st['gid'])) {
-      throw new HardenException('Identität des Dateibesitzers lässt sich nicht annehmen — nichts geändert.');
+    // seteuid keeps root's supplementary groups (usually "root"): the account's own group list replaces them for the duration.
+    if (!function_exists('posix_initgroups') || !posix_initgroups($st['name'], $st['gid'])) {
+      throw new HardenException('Gruppen des Kontos ' . Text::printable($st['name']) . ' lassen sich nicht annehmen — nichts geändert.');
     }
-    if (!posix_seteuid($st['uid'])) {
-      posix_setegid(0);
+    if (!posix_setegid($st['gid']) || !posix_seteuid($st['uid'])) {
+      self::becomeRoot();
       throw new HardenException('Identität des Dateibesitzers lässt sich nicht annehmen — nichts geändert.');
     }
     try {
       return $fn();
     } finally {
-      try {
-        posix_seteuid(0);
-      } finally {
-        posix_setegid(0);
-      }
+      self::becomeRoot();
     }
+  }
+
+  /**
+   * Back to root after asOwnerOf (also from the shutdown handler: exit() skips finally blocks): user, group, group list.
+   * Checked afterwards: a process that stays in a foreign identity must not carry on — it ends at once (exit code 2), without
+   * a restore in that identity; the shutdown handler then leaves the backups to the operator.
+   */
+  public static function becomeRoot(): void
+  {
+    try {
+      posix_seteuid(0);
+    } finally {
+      posix_setegid(0);
+      $root = posix_getpwuid(0);
+      $groups = posix_initgroups(is_array($root) ? $root['name'] : 'root', 0);
+    }
+    if (posix_geteuid() !== 0 || posix_getegid() !== 0 || !$groups) {
+      self::$identityLost = true;
+      Out::err("pg-harden: Die Identität root ließ sich nicht wiederherstellen — Lauf sofort abgebrochen, Sicherungen und Journal von Hand prüfen.\n");
+      exit(2);
+    }
+  }
+
+  /** " (als Konto …)" for messages: which identity asOwnerOf chose, empty when nothing was switched. */
+  public static function identityNote(): string
+  {
+    if (Platform::windows() || !function_exists('posix_geteuid') || posix_getuid() !== 0 || posix_geteuid() === 0) {
+      return '';
+    }
+    $pw = posix_getpwuid(posix_geteuid());
+    return ' (als Konto ' . Text::printable(is_array($pw) ? (string) $pw['name'] : (string) posix_geteuid())
+      . ', dem ein Verzeichnis auf dem Weg gehört — die Datei muss für dieses Konto beschreibbar sein)';
+  }
+
+  /**
+   * Reads a file of the server for apply/rollback: with the identity asOwnerOf chooses for the way, only a regular file, at most $max bytes.
+   * A link the service account planted to a device or a FIFO then opens as that account, not as root.
+   */
+  public static function readServerFile(string $path, int $max = 5242880): ?string
+  {
+    return self::asOwnerOf($path, fn() => self::attempt(fn() => is_file($path)) === true ? self::read($path, $max) : null);
+  }
+
+  /**
+   * Identity root takes on for $path, decided without a race: the way is walked from "/" with lstat. As long as every directory
+   * belongs to root and is writable by nobody else, nothing on it can change afterwards — links there were placed by root and are
+   * followed (at most 40). The first directory owned by another account decides: that account, for everything below it, whatever
+   * it renames or links later. The path itself, existing in a root-only directory, decides by its own owner. A directory of root
+   * writable by group or others is refused (anybody could plant something there that root would follow). Below the first directory
+   * of another account nothing is refused any more: whatever is planted there reaches at most that account's rights. Only for root
+   * on Unix (asOwnerOf).
+   *
+   * @return array{uid: int, gid: int, name: string}|null null: root may work on it itself
+   */
+  public static function writerFor(string $path): ?array
+  {
+    // Unix only: "\" is an ordinary character in a name there, replacing it would walk a different way than the kernel.
+    if (!str_starts_with($path, '/')) {
+      throw new HardenException('Pfad ist nicht absolut: ' . Text::printable($path) . ' — nichts geändert.');
+    }
+    $todo = array_values(array_filter(explode('/', $path), fn($s) => $s !== '' && $s !== '.'));
+    $cur = '/';
+    $links = 0;
+    while (true) {
+      $st = self::attempt(fn() => lstat($cur));
+      if ($st === null || ($st['mode'] & 0170000) !== 0040000) {
+        throw new HardenException('Verzeichnis ' . Text::printable($cur) . ' auf dem Weg zu ' . Text::printable($path) . ' ist nicht prüfbar — nichts geändert.');
+      }
+      if ($st['uid'] !== 0) {
+        return self::identity($st['uid']);
+      }
+      if (($st['mode'] & 0022) !== 0) {
+        throw new HardenException('Verzeichnis ' . Text::printable($cur) . ' auf dem Weg zu ' . Text::printable($path) . ' ist für Gruppe oder andere beschreibbar — nichts geändert.');
+      }
+      if ($todo === []) {
+        return null;
+      }
+      $name = array_shift($todo);
+      if ($name === '..') {
+        $cur = dirname($cur);
+        continue;
+      }
+      $next = rtrim($cur, '/') . '/' . $name;
+      $lst = self::attempt(fn() => lstat($next));
+      if ($lst === null) {
+        // Missing inside a root-only directory: only root could create it, so root may.
+        if (self::definitelyAbsent($next)) {
+          return null;
+        }
+        throw new HardenException('Eintrag ' . Text::printable($next) . ' ist nicht prüfbar — nichts geändert.');
+      }
+      $type = $lst['mode'] & 0170000;
+      if ($type === 0120000) {
+        $target = self::attempt(fn() => readlink($next));
+        if ($target === null || ++$links > 40) {
+          throw new HardenException('Link ' . Text::printable($next) . ' ist nicht auflösbar — nichts geändert.');
+        }
+        $todo =array_merge(array_values(array_filter(explode('/', $target), fn($s) => $s !== '' && $s !== '.')), $todo);
+        if (str_starts_with($target, '/')) {
+          $cur = '/';
+        }
+        continue;
+      }
+      if ($type === 0040000) {
+        $cur = $next;
+        continue;
+      }
+      if ($todo !== []) {
+        throw new HardenException(Text::printable($next) . ' ist kein Verzeichnis — nichts geändert.');
+      }
+      return $lst['uid'] === 0 ? null : self::identity($lst['uid']);
+    }
+  }
+
+  /**
+   * The account with its own primary group, not the group of a file: a directory "postgres:root" must not lend the root group.
+   * An owner without an account entry has no group list to take on — refused.
+   * @return array{uid: int, gid: int, name: string}
+   */
+  private static function identity(int $uid): array
+  {
+    $pw = function_exists('posix_getpwuid') ? posix_getpwuid($uid) : false;
+    if (!is_array($pw) || (int) $pw['gid'] === 0) {
+      throw new HardenException('Besitzer ' . $uid . ' hat kein eigenes Konto mit eigener Gruppe — mit dieser Identität wird nicht geschrieben, nichts geändert.');
+    }
+    return ['uid' => $uid, 'gid' => (int) $pw['gid'], 'name' => (string) $pw['name']];
   }
 
   /**
@@ -81,7 +205,8 @@ final class Fs
    */
   public static function definitelyAbsent(string $path): bool
   {
-    $path = rtrim(str_replace('\\', '/', $path), '/');
+    // As in canonical(): "\" is a separator on Windows only.
+    $path = rtrim(Platform::windows() ? str_replace('\\', '/', $path) : $path, '/');
     for ($i = 0; $i < 12 && $path !== '' && $path !== dirname($path); $i++) {
       $parent = dirname($path);
       $names = self::entries($parent);

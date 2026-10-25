@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * pg-harden 0.3.0
+ * pg-harden 0.3.1
  * Checks a PostgreSQL instance against a data-driven rule catalog, writes a change plan
  * and compares before/after reports.
  *
@@ -36,7 +36,7 @@ declare(strict_types=1);
  * Results and plans are suggestions: review them and test every change before applying it to production.
  */
 
-const PG_HARDEN_VERSION = '0.3.0';
+const PG_HARDEN_VERSION = '0.3.1';
 
 require_once __DIR__ . '/src/Os.php';
 require_once __DIR__ . '/src/Client.php';

@@ -57,7 +57,7 @@ A short form of this notice appears in `--help`, at the end of every report and 
 ## Requirements
 
 - PHP 8.3+ with `pdo_pgsql` and `mbstring` (for the certificate check of `client` also `openssl`, on Linux for `--user` and file
-  permissions `posix`); no other dependencies
+  permissions `posix`; outside Windows `apply` and `rollback` need `pcntl` and `posix` to change files); no other dependencies
 - Windows: Windows PowerShell 5.1 (ships with the system) for ACLs, service account and scheduled tasks
 - Password via `PGPASSWORD` or the pgpass file — never on the command line
 - Rights: superuser for the full scope. With fewer rights almost all rules still run; skipped ones are reported as "skipped" and "incomplete":
@@ -139,9 +139,15 @@ current run; otherwise it is reported as "not comparable".
 - **Sequence:** backup into the journal → write in place → the server validates the files on disk (`pg_hba_file_rules`, `pg_file_settings`;
   any deviation or error restores **without** reloading) → `pg_reload_conf()` → a **new** login with the same credentials (existing sessions
   survive a broken `pg_hba.conf` and prove nothing) → on failure restore the backups, reload again, check again.
-- **File access as root:** `apply` works on files owned by the service account with that account's identity. Files are replaced via a temp file
-  (Windows: write first, then truncate), never emptied beforehand. If the process dies in the middle of the file phase, a watchdog restores the
-  backups — on Linux only with the PHP extensions `pcntl` and `posix`; without them `apply` does not change files.
+- **File access as root:** root works on a path itself only while every directory on the way belongs to root and nobody else can write it.
+  From the first directory of another account on (usually the service account), `apply` and `rollback` work with that account's identity and
+  its own groups. This is designed so that a link or renamed directory planted by that account, even between check and write, reaches
+  nothing beyond its rights (test T14). Reads for a change go the same way (only regular files, size limit). A directory of root on the way
+  that group or others can write is refused; the identity of every target is settled before the first change. `postgresql.conf` is read once for
+  the change; `apply` creates at most one directory level. A file of root in a directory of the service account is written in place if that
+  account may write it, otherwise refused. Windows has no identity switch; junctions there have not been examined yet. Files are replaced via a
+  temp file (Windows: write first, then truncate), never emptied beforehand. If the process dies in the middle of the file phase, a watchdog
+  restores the backups — outside Windows only with the PHP extensions `pcntl` and `posix`; without them `apply` does not change files.
 - **Reload:** an unconfirmed reload counts as an error.
 - **`local` lines** of `pg_hba.conf` are never touched, so access through the Unix socket stays. A reload that is not confirmed counts as an error,
   because the login test would otherwise still see the old configuration. *(more detail: see German)*
@@ -156,7 +162,11 @@ current run; otherwise it is reported as "not comparable".
 - **`rollback --dir=<journal>`** restores the backups, reloads, tests a new login and runs the stored rollback statements. The journal is accepted
   only if it belongs to the executing user and is inaccessible to others, belongs to the same cluster (system identifier, data directory) and
   names only paths `apply` would write on this server. A journal can be rolled back only once. Later changes by third parties to the same files are
-  overwritten.
+  overwritten. An incomplete rollback (error or interruption) writes no `rollback-log.json` and can be repeated with the same command; it then
+  restores the same backups again and runs all rollback statements of the journal again (those that already ran change nothing; a `REVOKE` made
+  by someone else in between is undone as well). It is complete when it reports "Rückweg abgeschlossen" and `rollback-log.json` exists. While a
+  rollback with files runs, Ctrl+C, Ctrl+\, `TERM` and `HUP` do not interrupt it (where `pcntl` is available); other signals such as `kill -9`
+  still end it — then run the same command again. Outside Windows a rollback with files needs the PHP extensions `pcntl` and `posix`.
 - Without a terminal `--execute` additionally requires `--yes`; a second simultaneous `apply` on the same server is refused.
 
 ## Weak passwords (`auth.weak_passwords`)
@@ -272,12 +282,18 @@ Operating-system rules, `apply` and `rollback` need access to the server's files
 in and run as root there. Practise against `lab/` only — never against production systems.
 
 `tests/` contains `allowlist-test.php` (unit test of the allowlist that `apply` and `rollback` pass SQL through: `php tests/allowlist-test.php`),
-`lab-matrix.sh` (regression run of `apply`/`rollback` in a container), `lab-visibility.sh` and `lab-upgrade.sh` (catalog visibility, `pg_upgrade`,
+`lab-matrix.sh` (regression run of `apply`/`rollback` in a container, calls `lab-identity.php` for the identity rule when writing as root),
+`lab-visibility.sh` and `lab-upgrade.sh` (catalog visibility, `pg_upgrade`,
 restore) and `run-version-matrix.sh` with `matrix-table.php` (version matrix, result in [tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)). The
 container scripts change passwords, roles and databases and only start with `PGHARDEN_LAB=1` — **run them only in a throw-away container**, never
 against an instance with real data.
 
 ## Status
+
+0.3.1 (2026-10-25): **security fix** for `apply`/`rollback` as root (the service account could redirect a write into a directory of root and
+gain root rights that way; after updating, check as described in [CHANGELOG.md](CHANGELOG.md)), fix for `rollback` in a
+pipe that closes early (for example `| head`), a repeatable rollback after an interruption, structured reports, [examples/](examples/).
+Details in [CHANGELOG.md](CHANGELOG.md).
 
 0.3.0 (2026-10-24): `check`, `plan`, `verify`, `client`, `apply`, `rollback`, `rules`; 72 rules (61 for `check`, 11 for `client`). New compared to
 0.2.0: password check without login attempts, operating-system rules for Linux and Windows, `client`, `apply`/`rollback` with lockout protection,

@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.3.1 (2026-10-25)
+
+- **Security fix — update if you run `apply` or `rollback` as root.** Affected: 0.3.0 on Linux and other Unix systems, `apply --execute`
+  run as root (`rollback` of 0.3.0 could at most remove a file of the same name in such a directory). Windows: not examined yet, see
+  below. The service account (`postgres`) could make root create `90-pg-harden.conf` in a directory of its choice and own the file
+  afterwards, for example in `/etc`: by replacing `conf.d` with a link between the check and the write, or by changing `include_dir` in a
+  `postgresql.conf` it owns between two reads. A file the service account owns in a directory whose `*.conf` files root evaluates (for
+  example `/etc/ld.so.conf.d`) can give it root rights. Reproduced against 0.3.0 in a test container.
+  **Check after updating:** `find / -name 90-pg-harden.conf 2>/dev/null` — examine every hit outside the include directory of your
+  cluster, and check whether that include directory itself is a link. A hit elsewhere means the host may already be compromised: treat it
+  as such (restore or reinstall, change credentials); removing the file alone is not enough.
+  The way it works now: root works on a path itself only while every directory on the way belongs to root and nobody else can write it;
+  from the first directory of another account on, it works with that account's identity and that account's own groups (no longer root's
+  supplementary groups or the group of a directory). It is designed so that a link or renamed directory planted by that account, even
+  between check and write, only reaches what the account could reach anyway — test T14 (`tests/lab-identity.php`). The reads for a change
+  go the same way (only regular files, size limit). `postgresql.conf` is read once for the change, `apply` creates at most one directory
+  level, a directory of root on the way that group or others can write is refused, and the identity of every target is settled before the first
+  change. Windows has no identity switch; whether a junction of the service account can redirect a write there has not been examined yet.
+- Changed by the security fix: the identity now follows the directories on the way, not the owner of the file. A file of root in a
+  directory of the service account is written in place (owner and group stay) if the service account may write it, and refused otherwise —
+  the message names the account. `apply` and `rollback` were checked on the Debian package layout (PostgreSQL 17, `/etc/postgresql/17/main`
+  owned by `postgres`).
+- Fix: `rollback` piped into a command that closes early (for example `| head`) could be killed after restoring the files and before
+  finishing: depending on timing before the reload (the server kept running on a configuration that was no longer on disk) or before the
+  SQL way back. Output writes now fail quietly instead of ending the process; where `pcntl` is available, `SIGPIPE` is ignored. Regression
+  test T12 in `tests/lab-matrix.sh`.
+- Fix: a repeated `rollback` after an incomplete one was refused ("Das Journal nennt einen Pfad, den apply auf diesem Server nie schreiben
+  würde"), because the first attempt had already removed `conf.d`. Paths below a removed directory are now compared correctly, and entries
+  the journal created that are already gone count as done. Regression tests T13 and T13b (interrupted after and before the reload).
+- **If a `rollback` of 0.3.0 was interrupted** (no `rollback-log.json` in the journal): run the same `rollback --dir=<journal>` again with
+  0.3.1. It restores the same backups again, reloads and runs all rollback statements of the journal again — those that already ran change
+  nothing, a `REVOKE` someone else made in between is undone as well. It is complete when it reports "Rückweg abgeschlossen" and `rollback-log.json` exists in the journal. Measured on PostgreSQL 18
+  (Debian 13) with a 0.3.0 `rollback` killed by `| head -1`.
+- Changed: a `rollback` with files ignores Ctrl+C, Ctrl+\ and `TERM`/`HUP` while it runs (with `pcntl`); on Windows it registers the console
+  handler `apply` already uses for Ctrl+C and Ctrl+Break (not tested on Windows). Other signals such as `kill -9` still end it — then run
+  the same command again. `apply` also restores its backups on Ctrl+\ now.
+- Changed: outside Windows, a `rollback` that restores files requires the PHP extensions `pcntl` and `posix`, like file changes by `apply`
+  (Debian's `php-cli` includes both), and refuses to start without them, before changing anything. Without `posix` no journal is accepted.
+- Reports (`check`, `verify`, text and HTML) are structured: summary first, findings grouped by severity with rule id and places, then rules
+  to review, incomplete, skipped and clean ones. The intended-use and no-warranty notices moved to a closing "Hinweise" block.
+- `apply` prints planned changes, the rules that still need an approval (collected in one list) and the result steps in sections; `rollback`
+  prints its steps. The confirmation prompt of `apply` goes to stderr, so it stays visible when stdout is redirected.
+- [examples/](examples/): unedited output of every command against a throw-away PostgreSQL 18 container, recreated with
+  `examples/generate.sh`.
+
 ## 0.3.0 (2026-10-24) — first public release
 
 - Commands: `check`, `plan`, `verify`, `client`, `apply`, `rollback`, `rules`; 72 rules (61 for the server, 11 for the client machine).

@@ -1,14 +1,14 @@
 /root/journal:
 total 136
-drwx------ 3 root root  4096 Oct 24 21:06 .
-drwx------ 1 root root  4096 Oct 24 21:06 ..
--rw------- 1 root root  2439 Oct 24 21:06 apply-log.json
-drwx------ 2 root root  4096 Oct 24 21:06 backup
--rw------- 1 root root 65252 Oct 24 21:06 report-after.json
--rw------- 1 root root 55994 Oct 24 21:06 report-before.json
+drwx------ 3 root root  4096 Oct 25 22:10 .
+drwx------ 1 root root  4096 Oct 25 22:10 ..
+-rw------- 1 root root  2439 Oct 25 22:10 apply-log.json
+drwx------ 2 root root  4096 Oct 25 22:10 backup
+-rw------- 1 root root 65252 Oct 25 22:10 report-after.json
+-rw------- 1 root root 55994 Oct 25 22:10 report-before.json
 
 /root/journal/backup:
 total 40
-drwx------ 2 root root  4096 Oct 24 21:06 .
-drwx------ 3 root root  4096 Oct 24 21:06 ..
--rw------- 1 root root 32657 Oct 24 21:06 01-postgresql.conf
+drwx------ 2 root root  4096 Oct 25 22:10 .
+drwx------ 3 root root  4096 Oct 25 22:10 ..
+-rw------- 1 root root 32657 Oct 25 22:10 01-postgresql.conf

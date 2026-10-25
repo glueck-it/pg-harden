@@ -9,7 +9,7 @@ und Rückweg aus.
 Geprüft werden `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256, schwache Passwörter, Rollen und Rechte, `PUBLIC`-Rechte, `SECURITY DEFINER`-Funktionen,
 Protokollierung und die Betriebssystemseite (Dateirechte, Dienstkonto) von PostgreSQL 14 bis 18 und 19 RC1 — 72 Regeln, ein PHP-Werkzeug
 ohne Composer-Abhängigkeiten (PHP 8.3 mit `pdo_pgsql` und `mbstring`). Getestet mit PostgreSQL 14 bis 18 und 19rc1 (Docker, Debian 13) sowie PostgreSQL 18 unter Windows 11
-([tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)). Gepflegt von [Frank Glück](https://dozent.net) — Datenbankberater, Entwickler und Dozent. Impressum: <https://dozent.net/informationen/impressum>.
+([tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)) — die Matrix zeigt Lauffähigkeit und Versionsunterschiede, nicht die Erkennungsgüte der Regeln. Gepflegt von [Frank Glück](https://dozent.net) — Datenbankberater, Entwickler und Dozent. Impressum: <https://dozent.net/informationen/impressum>.
 
 **`check`, `plan`, `verify`, `client` und `rules` schreiben nichts auf den Server.** Jede Datenbankprüfung läuft als einzelne
 vorbereitete Anweisung in `BEGIN TRANSACTION READ ONLY … ROLLBACK`, mit `search_path = pg_catalog, pg_temp` und Zeitlimits.
@@ -48,7 +48,8 @@ Eine Kurzfassung dieses Hinweises steht in `--help`, am Ende jedes Berichts und 
 ## Voraussetzungen
 
 - PHP 8.3+ mit `pdo_pgsql` und `mbstring` (für die Zertifikatsprüfung von `client` zusätzlich `openssl`,
-  unter Linux für `--user` und Dateirechte `posix`), keine weiteren Abhängigkeiten
+  unter Linux für `--user` und Dateirechte `posix`; außerhalb von Windows brauchen `apply` und `rollback` für Dateiänderungen `pcntl`
+  und `posix`), keine weiteren Abhängigkeiten
 - Windows: Windows PowerShell 5.1 (liegt dem System bei) für ACLs, Dienstkonto und Aufgabenplanung
 - Passwort über `PGPASSWORD` oder die pgpass-Datei — nie auf der Kommandozeile
 - Rechte: Superuser für den vollen Umfang. Mit weniger Rechten laufen fast alle Regeln; ausgelassene werden
@@ -140,10 +141,17 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   Fehler führt zur Wiederherstellung **ohne** Neuladen) → `pg_reload_conf()` → **neue** Anmeldung mit denselben
   Zugangsdaten (bestehende Sitzungen überleben eine kaputte `pg_hba.conf` und beweisen nichts) → bei Misserfolg
   Sicherungen zurück, erneut laden, erneut prüfen.
-- **Dateizugriff als root:** `apply` arbeitet an Dateien, die dem Dienstkonto gehören, mit dessen Identität — ein vom Dienstkonto
-  untergeschobener symbolischer Link führt so nicht über dessen Rechte hinaus. Dateien werden über eine Temp-Datei ersetzt (Windows:
-  erst schreiben, dann kürzen), nie vorher geleert. Stirbt der Prozess mitten in der Dateiphase (Fehler, Strg+C, kill), spielt ein Wächter
-  die Sicherungen zurück — unter Linux nur mit den PHP-Erweiterungen `pcntl` und `posix`; fehlen sie, ändert `apply` keine Dateien.
+- **Dateizugriff als root:** root arbeitet an einem Pfad nur selbst, solange jedes Verzeichnis auf dem Weg root gehört und niemand sonst
+  hineinschreiben kann. Ab dem ersten Verzeichnis eines anderen Kontos (meist des Dienstkontos) arbeiten `apply` und `rollback` mit dessen
+  Identität und dessen eigenen Gruppen. Das ist so gebaut, dass ein vom Dienstkonto untergeschobener Link oder ein umbenanntes Verzeichnis
+  nicht über dessen Rechte hinausreicht, auch wenn dies erst zwischen Prüfung und Schreiben geschieht (Test T14). Lesezugriffe für eine
+  Änderung gehen denselben Weg (nur reguläre Dateien, mit Größengrenze). Ein Verzeichnis von root auf dem Weg, in das Gruppe oder andere
+  schreiben können, wird abgewiesen; die Identität für jedes Ziel steht vor der ersten Änderung fest. `postgresql.conf` wird für die Änderung nur
+  einmal gelesen; `apply` legt höchstens eine Verzeichnisebene an. Eine Datei von root in einem Verzeichnis des Dienstkontos wird an Ort und
+  Stelle geschrieben, wenn das Dienstkonto sie beschreiben darf, sonst abgewiesen. Windows kennt keinen Identitätswechsel; Junctions sind
+  dort noch nicht untersucht. Dateien werden über eine Temp-Datei ersetzt (Windows: erst schreiben, dann
+  kürzen), nie vorher geleert. Stirbt der Prozess mitten in der Dateiphase (Fehler, Strg+C, kill), spielt ein Wächter die Sicherungen
+  zurück — außerhalb von Windows nur mit den PHP-Erweiterungen `pcntl` und `posix`; fehlen sie, ändert `apply` keine Dateien.
 - **Neuladen:** ein nicht bestätigtes Neuladen zählt als Fehler (der Anmeldetest würde sonst noch die alte Konfiguration sehen).
 - **Grenzen des Anmeldetests:** er prüft die Anmeldung dieses Werkzeugs mit denselben Zugangsdaten — nicht Anwendungen, andere Rollen
   oder Clients ohne TLS. Vor `host` → `hostssl` weist `apply` deshalb ab, wenn gerade Verbindungen anderer Rechner ohne TLS bestehen.
@@ -157,6 +165,12 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   gespeicherten Rückweg-Anweisungen aus. Das Journal wird nur angenommen, wenn es dem ausführenden Benutzer gehört und für andere
   unzugänglich ist, zum selben Cluster gehört (Systemkennung, Datenverzeichnis) und nur Pfade nennt, die `apply` auf diesem Server
   schreiben würde. Ein Journal lässt sich nur einmal zurücknehmen. Spätere Änderungen Dritter an denselben Dateien werden dabei überschrieben.
+  Ein unvollständiger Rückweg (Fehler oder Abbruch) schreibt kein `rollback-log.json` und lässt sich mit demselben Befehl wiederholen; er spielt
+  dann dieselben Sicherungen erneut zurück und führt alle Rückweg-Anweisungen des Journals erneut aus (bereits gelaufene ändern nichts; ein
+  zwischenzeitliches `REVOKE` Dritter wird dabei ebenfalls zurückgenommen). Vollständig ist er, wenn er „Rückweg abgeschlossen“ meldet und
+  `rollback-log.json` existiert. Während ein Rückweg mit Dateien läuft, unterbrechen ihn Strg+C, Strg+\, `TERM` und `HUP` nicht (wo `pcntl`
+  vorhanden ist); andere Signale wie `kill -9` beenden ihn weiterhin — dann denselben Befehl wiederholen. Außerhalb von Windows braucht ein
+  Rückweg mit Dateien die PHP-Erweiterungen `pcntl` und `posix`.
 - Ohne Terminal verlangt `--execute` zusätzlich `--yes`; ein zweiter `apply` gleichzeitig auf demselben Server wird abgewiesen.
 
 ## Schwache Passwörter (`auth.weak_passwords`)
@@ -293,12 +307,18 @@ das Verzeichnis hineinkopieren und als root im Container ausführen. Übungen nu
 ## Tests
 
 `tests/` enthält: `allowlist-test.php` (Unit-Test der Allowlist, die `apply` und `rollback` passieren müssen; `php tests/allowlist-test.php`),
-`lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container), `lab-visibility.sh` und `lab-upgrade.sh` (Katalog-Sichtbarkeit,
+`lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container, ruft `lab-identity.php` für die Identitätsregel beim Schreiben als
+root auf), `lab-visibility.sh` und `lab-upgrade.sh` (Katalog-Sichtbarkeit,
 `pg_upgrade`, Wiederherstellung) und `run-version-matrix.sh` mit `matrix-table.php` (Versionsmatrix, Ergebnis in `VERSIONSMATRIX.md`).
 Die Container-Skripte ändern Passwörter, Rollen und Datenbanken und starten nur mit `PGHARDEN_LAB=1` — **ausschließlich in einem
 Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
 
 ## Stand
+
+0.3.1 (25.10.2026): **Sicherheitskorrektur** für `apply`/`rollback` als root (das Dienstkonto konnte einen Schreibvorgang in ein Verzeichnis
+von root umlenken und so root-Rechte erlangen; nach dem Update prüfen wie im [CHANGELOG.md](CHANGELOG.md) beschrieben),
+Korrektur für `rollback` in einer Pipe, die vorzeitig schließt (z. B. `| head`), wiederholbarer Rückweg nach einem Abbruch, gegliederte
+Berichte, Beispielausgaben unter [examples/](examples/). Einzelheiten in [CHANGELOG.md](CHANGELOG.md) (englisch).
 
 0.3.0 (24.10.2026): `check`, `plan`, `verify`, `client`, `apply`, `rollback`, `rules`; 72 Regeln (61 für `check`, 11 für `client`).
 Neu gegenüber 0.2.0: Passwortprüfung ohne Anmeldeversuch, Betriebssystem-Regeln Linux und Windows, `client`, `apply`/`rollback`

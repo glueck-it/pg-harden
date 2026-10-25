@@ -124,7 +124,11 @@ final class Journal
   /** The journal drives writes with elevated rights: it is only trusted if nobody else could have touched it. */
   public static function load(string $dir): array
   {
-    if (!Platform::windows() && function_exists('posix_geteuid')) {
+    if (!Platform::windows()) {
+      // Without posix the owner cannot be compared — and a journal without that check could carry any SQL way back.
+      if (!function_exists('posix_geteuid')) {
+        throw new HardenException('Die PHP-Erweiterung posix fehlt — ohne sie lässt sich nicht prüfen, wem das Journal gehört; dem Journal wird nicht vertraut.');
+      }
       $st = Fs::attempt(fn() => stat($dir));
       if ($st === null || $st['uid'] !== posix_geteuid() || ($st['mode'] & 0077) !== 0) {
         throw new HardenException("$dir gehört nicht dem ausführenden Benutzer oder ist für andere zugänglich — dem Journal wird nicht vertraut.");
@@ -160,15 +164,17 @@ final class Journal
   /** @return ?string relative path of the copy, null if the file did not exist */
   public function backup(string $path): ?string
   {
-    // Read with the identity of the file's owner: a symlink planted by the service account leads nowhere new.
+    // Read with the identity Fs::asOwnerOf chooses for the way: a symlink planted by the service account leads nowhere new.
     $exists = Fs::asOwnerOf($path, fn() => Fs::attempt(fn() => is_file($path)));
     if ($exists !== true) {
       return null;
     }
-    $content = Fs::asOwnerOf($path, fn() => Fs::attempt(fn() => file_get_contents($path)));
+    $content = Fs::readServerFile($path);
     $name = sprintf('backup/%02d-%s', count($this->data['files']) + 1, preg_replace('/[^A-Za-z0-9._-]/', '_', basename($path)));
     $fh = $content === null ? null : Fs::attempt(fn() => fopen($this->dir . '/' . $name, 'x'));
-    if (!is_resource($fh) || fwrite($fh, $content) !== strlen($content) || !fclose($fh)) {
+    $written = is_resource($fh) && Fs::attempt(fn() => fwrite($fh, $content)) === strlen($content);
+    $closed = is_resource($fh) && Fs::attempt(fn() => fclose($fh)) === true;
+    if (!$written || !$closed) {
       throw new HardenException('Sicherung von ' . Text::printable($path) . ' fehlgeschlagen — nichts wurde geändert.');
     }
     Fs::attempt(fn() => chmod($this->dir . '/' . $name, 0600));
@@ -240,7 +246,7 @@ final class Guard
     register_shutdown_function([self::class, 'onShutdown']);
     if (function_exists('pcntl_async_signals') && function_exists('pcntl_signal')) {
       pcntl_async_signals(true);
-      foreach ([SIGINT, SIGTERM, SIGHUP] as $signal) {
+      foreach ([SIGINT, SIGTERM, SIGHUP, SIGQUIT] as $signal) {
         pcntl_signal($signal, fn() => exit(130));
       }
     } elseif (function_exists('sapi_windows_set_ctrl_handler')) {
@@ -260,14 +266,19 @@ final class Guard
     }
     ['journal' => $journal, 'files' => $files] = self::$active;
     self::$active = null;
-    // exit() skips finally blocks: a signal inside Fs::asOwnerOf must not leave this process as the service account.
-    if (function_exists('posix_seteuid')) {
-      posix_seteuid(0);
-      posix_setegid(0);
+    // Restoring in a foreign identity could write where it must not: leave the backups to the operator.
+    if (Fs::$identityLost) {
+      Out::err('pg-harden: nichts zurückgespielt. Sicherungen und Journal: ' . Text::printable($journal->dir) . "\n");
+      return;
+    }
+    // exit() skips finally blocks: a signal inside Fs::asOwnerOf must not leave this process as the service account
+    // (becomeRoot ends the process at once if that fails).
+    if (function_exists('posix_seteuid') && function_exists('posix_initgroups') && posix_getuid() === 0) {
+      Fs::becomeRoot();
     }
     // A second Ctrl+C must not interrupt the restore.
     if (function_exists('pcntl_signal')) {
-      foreach ([SIGINT, SIGTERM, SIGHUP] as $signal) {
+      foreach ([SIGINT, SIGTERM, SIGHUP, SIGQUIT] as $signal) {
         pcntl_signal($signal, SIG_IGN);
       }
     } elseif (function_exists('sapi_windows_set_ctrl_handler')) {
@@ -354,15 +365,24 @@ final class ServerFiles
     return ['data_directory' => (string) $row['data_directory'], 'system_identifier' => (string) $row['system_identifier']];
   }
 
-  /** Comparable form of a path that may not exist yet. */
+  /**
+   * Comparable form of a path that may not exist yet: the nearest existing ancestor resolved, the missing rest appended
+   * (what does not exist cannot be a link). A repeated rollback needs this — the first one already removed conf.d.
+   * Bounded by the number of path components; "." or ".." in the missing rest is never comparable.
+   */
   public static function norm(string $path): ?string
   {
-    $c = Fs::canonical($path);
-    if ($c !== null) {
-      return $c;
+    $tail = [];
+    for ($p = $path; ($c = Fs::canonical($p)) === null; $p = $parent) {
+      $parent = dirname($p);
+      $name = basename($p);
+      // Only what an ancestor's listing proves missing counts as missing — a dangling link or a place without access does not.
+      if ($parent === $p || $name === '.' || $name === '..' || $name === '' || !Fs::definitelyAbsent($p)) {
+        return null;
+      }
+      array_unshift($tail, Platform::windows() ? strtolower($name) : $name);
     }
-    $dir = Fs::canonical(dirname($path));
-    return $dir === null ? null : $dir . '/' . (Platform::windows() ? strtolower(basename($path)) : basename($path));
+    return $tail === [] ? $c : rtrim($c, '/') . '/' . implode('/', $tail);
   }
 
   /** The only paths apply ever writes, and so the only ones a journal may name. @return string[] */
@@ -374,7 +394,7 @@ final class ServerFiles
       $out[] = $p === null ? null : self::norm($p);
     }
     $conf = $local->path('config_file');
-    $config = $conf === null ? null : Fs::attempt(fn() => file_get_contents($conf));
+    $config = $conf === null ? null : Fs::readServerFile($conf);
     $inc = ($config === null ? null : Applier::includeDir($config, $conf)) ?? ($conf === null ? null : dirname($conf) . '/conf.d');
     if ($inc !== null) {
       $out[] = self::norm($inc);
@@ -458,8 +478,10 @@ final class ServerFiles
 
   /**
    * Replaces a file without ever leaving it empty or half written. Unix: temp file next to it, mode and group
-   * copied, then rename. Where that is impossible (Windows, directory not writable): the new content is written
-   * first and the file shortened afterwards. As root, the work happens with the identity of the file's owner.
+   * copied, then rename — only if the temp file then has the owner and group of the original. Otherwise (Windows,
+   * directory not writable, a file of root in the service account's directory, a group the identity is not a member of)
+   * the new content is written in place first and the file shortened afterwards. As root, the work happens with the
+   * identity Fs::asOwnerOf chooses for the way.
    */
   public static function overwrite(string $path, string $content): void
   {
@@ -482,8 +504,11 @@ final class ServerFiles
               }
               chmod($tmp, $st['mode'] & 07777);
               Fs::attempt(fn() => chgrp($tmp, $st['gid']));
+              // Renaming would hand the file to another owner or group: write in place instead, which keeps both.
+              $new = Fs::attempt(fn() => stat($tmp));
+              $same = $new !== null && $new['uid'] === $st['uid'] && $new['gid'] === $st['gid'];
               // A file mounted on its own (container bind mount) cannot be replaced: fall back to writing in place.
-              if (Fs::attempt(fn() => rename($tmp, $path)) === true) {
+              if ($same && Fs::attempt(fn() => rename($tmp, $path)) === true) {
                 return;
               }
             } finally {
@@ -493,7 +518,7 @@ final class ServerFiles
         }
         $fh = Fs::attempt(fn() => fopen($path, 'r+'));
         if (!is_resource($fh)) {
-          throw new HardenException('Keine Schreibrechte auf ' . Text::printable($path) . ' — als Dienstkonto bzw. mit Administrator-/root-Rechten ausführen.');
+          throw new HardenException('Keine Schreibrechte auf ' . Text::printable($path) . Fs::identityNote() . '.');
         }
         $ok = flock($fh, LOCK_EX) && rewind($fh) && self::writeAll($fh, $content) && ftruncate($fh, strlen($content)) && fflush($fh);
         Fs::attempt(fn() => fsync($fh));
@@ -529,9 +554,9 @@ final class ServerFiles
 
   public static function assertWritable(string $path): void
   {
-    $fh = Fs::asOwnerOf($path, fn() => Fs::attempt(fn() => fopen($path, 'r+')));
+    [$fh, $note] = Fs::asOwnerOf($path, fn() => [Fs::attempt(fn() => fopen($path, 'r+')), Fs::identityNote()]);
     if (!is_resource($fh)) {
-      throw new HardenException('Keine Schreibrechte auf ' . Text::printable($path) . ' — als Dienstkonto bzw. mit Administrator-/root-Rechten ausführen.');
+      throw new HardenException('Keine Schreibrechte auf ' . Text::printable($path) . $note . '.');
     }
     fclose($fh);
   }
@@ -545,8 +570,18 @@ final class ServerFiles
         if (!is_resource($fh)) {
           throw new HardenException('Datei ' . Text::printable($path) . ' lässt sich nicht anlegen (Rechte oder Verzeichnis fehlt).');
         }
-        $ok = self::writeAll($fh, $content);
-        fclose($fh);
+        // The caller forgets the journal entry for a failed create: the half-written file must not stay behind unrecorded —
+        // also when the failure arrives as an exception (a write notice on a full disk becomes an ErrorException).
+        try {
+          $ok = self::writeAll($fh, $content);
+        } catch (Throwable $e) {
+          $ok = false;
+        }
+        Fs::attempt(fn() => fclose($fh));
+        if (!$ok) {
+          Fs::attempt(fn() => unlink($path));
+          throw new HardenException('Schreiben von ' . Text::printable($path) . ' fehlgeschlagen' . (isset($e) ? ': ' . $e->getMessage() : '') . '.');
+        }
         $st = Fs::attempt(fn() => stat($sibling));
         if ($st !== null && !Platform::windows()) {
           Fs::attempt(fn() => chmod($path, ($st['mode'] & 0660) ?: 0640));
@@ -554,9 +589,6 @@ final class ServerFiles
             Fs::attempt(fn() => chown($path, $st['uid']));
             Fs::attempt(fn() => chgrp($path, $st['gid']));
           }
-        }
-        if (!$ok) {
-          throw new HardenException('Schreiben von ' . Text::printable($path) . ' fehlgeschlagen.');
         }
       });
     } catch (ErrorException $e) {
@@ -605,6 +637,10 @@ final class ServerFiles
     foreach (array_reverse($files) as $f) {
       try {
         if ($f['action'] === 'created') {
+          // Already gone (an interrupted or failed earlier rollback): nothing to remove, and no owner to take over.
+          if (Fs::definitelyAbsent($f['path'])) {
+            continue;
+          }
           Fs::asOwnerOf($f['path'], function () use ($f): void {
             if (file_exists($f['path'])) {
               $removed = is_dir($f['path']) ? rmdir($f['path']) : unlink($f['path']);
@@ -815,7 +851,7 @@ final class Applier
     }
     if ($plan['conf'] !== [] && $ctx->local !== null) {
       $confPath = $ctx->local->path('config_file');
-      $config = $confPath === null ? null : Fs::attempt(fn() => file_get_contents($confPath));
+      $config = $confPath === null ? null : Fs::readServerFile($confPath);
       $dir = $config === null ? null : self::includeDir($config, $confPath);
       if ($config === null) {
         $plan['notes'][] = 'postgresql.conf nicht lesbar — apply würde die Datei nicht ändern können';
@@ -1003,7 +1039,7 @@ final class Applier
       }
       return false;
     };
-    $config = Fs::attempt(fn() => file_get_contents($confPath));
+    $config = Fs::readServerFile($confPath);
     $includeDir = $config === null ? null : (self::includeDir($config, $confPath) ?? dirname($confPath) . '/conf.d');
     if (($plan['hba'] !== [] && !$inside($hbaPath)) || ($plan['conf'] !== [] && !$inside($includeDir))) {
       $journal->step('Dateien', 'FEHLER', 'hba_file bzw. Include-Verzeichnis liegen weder im Datenverzeichnis noch neben postgresql.conf — apply schreibt dort nicht');
@@ -1023,7 +1059,14 @@ final class Applier
     try {
       $hbaRowsBefore = $plan['hba'] !== [] ? $files->hbaRows() : [];
       $hbaNew = $plan['hba'] !== [] ? $this->editHba($hbaPath, $plan['hba'], $hbaRowsBefore, $local, $journal) : null;
-      $confNew = $plan['conf'] !== [] ? $this->prepareConf($plan['conf'], $confPath, $journal) : null;
+      // The same content that $inside checked above: a second read could name a different include_dir.
+      $confNew = $plan['conf'] !== [] ? $this->prepareConf($plan['conf'], $confPath, (string) $config) : null;
+      // The identity for every target is settled now, before the first change: a refusal (a directory others can write,
+      // an owner without an account) must not come halfway through the file phase.
+      $targets = array_merge($hbaNew !== null ? [$hbaPath] : [], array_column($confNew['writes'] ?? [], 'path'), array_filter(array_column($confNew['writes'] ?? [], 'mkdir')));
+      foreach ($targets as $target) {
+        Fs::asOwnerOf($target, static fn() => null);
+      }
       // Nothing on disk has changed yet. Prove write access to everything that will be overwritten before the first backup.
       if ($hbaNew !== null) {
         ServerFiles::assertWritable($hbaPath);
@@ -1169,7 +1212,7 @@ final class Applier
   /** @return array{content: string, edits: array<int, array{type?: string, method?: string}>} */
   private function editHba(string $path, array $actions, array $rowsBefore, LocalServer $local, Journal $journal): array
   {
-    $content = Fs::attempt(fn() => file_get_contents($path));
+    $content = Fs::readServerFile($path);
     if ($content === null) {
       throw new HardenException('pg_hba.conf nicht lesbar: ' . Text::printable($path));
     }
@@ -1233,13 +1276,9 @@ final class Applier
   }
 
   /** @return array{writes: array} files to write: the include file, and postgresql.conf when include_dir is missing */
-  private function prepareConf(array $settings, string $confPath, Journal $journal): array
+  private function prepareConf(array $settings, string $confPath, string $config): array
   {
     $writes = [];
-    $config = Fs::attempt(fn() => file_get_contents($confPath));
-    if ($config === null) {
-      throw new HardenException('postgresql.conf nicht lesbar: ' . Text::printable($confPath));
-    }
     $includeDir = self::includeDir($config, $confPath);
     $mkdir = null;
     if ($includeDir === null) {
@@ -1254,8 +1293,12 @@ final class Applier
     } elseif (Fs::attempt(fn() => is_dir($includeDir)) !== true) {
       $mkdir = $includeDir;
     }
+    // apply creates one directory, never a chain: the server reports a missing include_dir anyway, this keeps it explicit.
+    if ($mkdir !== null && Fs::attempt(fn() => is_dir(dirname($mkdir))) !== true) {
+      throw new HardenException('Das Include-Verzeichnis ' . Text::printable($mkdir) . ' hat kein vorhandenes Elternverzeichnis — apply legt nur eine Ebene an.');
+    }
     $target = $includeDir . '/90-pg-harden.conf';
-    $existing = Fs::attempt(fn() => file_get_contents($target));
+    $existing = Fs::readServerFile($target);
     $writes[] = ['path' => $target, 'content' => self::renderConf($settings, $existing), 'mkdir' => $mkdir, 'base' => $existing];
     return ['writes' => $writes];
   }
@@ -1402,9 +1445,10 @@ final class Rollback
       if ($ctx->local === null) {
         throw new HardenException('Die Dateien lassen sich nur auf dem Server selbst zurückspielen (' . $ctx->localNote . ').');
       }
-      // Without pcntl a closed output or a signal could end the process between "restored" and "reloaded" (Linux; Windows has no SIGPIPE).
-      if (PHP_OS_FAMILY !== 'Windows' && !function_exists('pcntl_signal')) {
-        throw new HardenException('rollback mit Dateien braucht unter Linux die PHP-Erweiterung pcntl (Schutz vor Abbruch mitten im Zurückspielen) — nichts geändert.');
+      // Same requirement as apply: without pcntl a closed output or a signal could end the process between "restored" and "reloaded",
+      // without posix root would write as root instead of as the file's owner (Windows has neither SIGPIPE nor an identity switch).
+      if (!Platform::windows() && (!function_exists('pcntl_signal') || !function_exists('posix_seteuid'))) {
+        throw new HardenException('rollback mit Dateien braucht die PHP-Erweiterungen pcntl und posix (Schutz bei Abbruch und Identitätswechsel als root) — nichts geändert.');
       }
       $allowed = ServerFiles::allowedTargets($ctx->local);
       foreach ($data['files'] as $f) {
@@ -1413,10 +1457,16 @@ final class Rollback
         }
       }
     }
-    // Restoring and reloading must not be cut short by Ctrl+C, a closed terminal or a stopped service.
-    if (function_exists('pcntl_signal')) {
-      foreach ([SIGINT, SIGTERM, SIGHUP] as $signal) {
-        pcntl_signal($signal, SIG_IGN);
+    // Restoring and reloading must not be cut short by Ctrl+C, Ctrl+\, a closed terminal or a stopped service; once set, this lasts
+    // to the end, the SQL way back included. Without files nothing is set: the SQL way back alone runs in one transaction per
+    // database. SIGKILL cannot be caught — the same command repeats the rollback.
+    if ($data['files'] !== []) {
+      if (function_exists('pcntl_signal')) {
+        foreach ([SIGINT, SIGTERM, SIGHUP, SIGQUIT] as $signal) {
+          pcntl_signal($signal, SIG_IGN);
+        }
+      } elseif (function_exists('sapi_windows_set_ctrl_handler')) {
+        sapi_windows_set_ctrl_handler(fn() => true);
       }
     }
     $log = ['started_at' => date(DATE_ATOM), 'steps' => []];

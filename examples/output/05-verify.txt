@@ -1,4 +1,4 @@
-pg-harden 0.3.0 · Prüfbericht mit Vergleich · 24.10.2026 21:06 (+00:00)
+pg-harden 0.3.1 · Prüfbericht mit Vergleich · 25.10.2026 22:10 (+00:00)
 Server        127.0.0.1:5432 · PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) · Benutzer postgres (Superuser) · ohne
               TLS
 Umfang        Datenbanken postgres, shop, template1 · Betriebssystem-Regeln geprüft
@@ -8,7 +8,7 @@ ZUSAMMENFASSUNG
   24 Befunde    5 hoch · 10 mittel · 9 niedrig
   33 ohne Befund · 2 ohne Befund, aber nicht vollständig geprüft · 2 zu sichten · 0 übersprungen · 0 Fehler
 
-VERGLEICH MIT DEM BERICHT VOM 24.10.2026 21:06 (+00:00)
+VERGLEICH MIT DEM BERICHT VOM 25.10.2026 22:10 (+00:00)
   Behoben 4 · Neu 0 · Weiter offen 35 · Nicht vergleichbar (diesmal nicht erneut geprüft) 0
 
   Behoben (4)
@@ -197,7 +197,7 @@ OHNE BEFUND (33)
   os.ssl_key_permissions        Privater TLS-Schlüssel ist nur für das Dienstkonto lesbar
                                 → TLS ist nicht eingeschaltet — nichts zu prüfen
   os.disk_free                  Datenträger von Daten, WAL und Protokollen haben ausreichend freien Platz
-                                → Datenverzeichnis: 86 % frei (861.3 GiB)
+                                → Datenverzeichnis: 85 % frei (854.6 GiB)
   os.log_permissions            Protokolldateien sind nicht für alle Benutzer des Systems lesbar
                                 → Der Logging-Collector ist aus — Protokolle gehen an syslog/journald oder
                                   stderr des Dienstes

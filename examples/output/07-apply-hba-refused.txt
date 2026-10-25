@@ -1,4 +1,4 @@
-pg-harden 0.3.0 · apply · Ausführung · 24.10.2026 21:06 (+00:00)
+pg-harden 0.3.1 · apply · Ausführung · 25.10.2026 22:10 (+00:00)
 Server        127.0.0.1:5432 · PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) · Benutzer postgres
 
 GEPLANTE ÄNDERUNGEN

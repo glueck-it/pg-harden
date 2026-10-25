@@ -1,8 +1,9 @@
-# Versionsmatrix PostgreSQL 14 bis 19 (Stand 24.10.2026, Programmstand 0.3.0)
+# Versionsmatrix PostgreSQL 14 bis 19 (Stand 25.10.2026, Programmstand 0.3.1)
 
 Getestet mit `tests/run-version-matrix.sh`: je Version ein Container (`postgres:14-trixie` … `postgres:18-trixie`, `postgres:19rc1`,
 Debian 13, PHP 8.4.27, als root im Container, Datenverzeichnis lokal, Vertrauensanmeldung wie in `lab/`). Die Versionen meldete der
-Server selbst (`show server_version`): 14.24, 15.19, 16.15, 17.11, 18.6 und 19rc1 — jeweils der Stand der Image-Tags am 24.10.2026.
+Server selbst (`show server_version`): 14.24, 15.19, 16.15, 17.11, 18.6 und 19rc1 — jeweils der Stand der Image-Tags am 25.10.2026.
+Mit Programmstand 0.3.0 ergab die Matrix am 24.10.2026 dieselbe Statustabelle.
 PostgreSQL 19 ist ein Release Candidate; die Veröffentlichung ist laut der Ankündigung von RC 1 auf postgresql.org (Stand 24.10.2026)
 für den 19.11.2026 geplant. Die Spalte 19rc1 ist eine Vorabprüfung, kein Freigabevermerk.
 
@@ -12,8 +13,10 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
 ## Ergebnis
 
 - **Kein Fehlerstatus** in `check` auf keiner Version; die Fehlerausgabe ist überall leer.
-- **Regressionsläufe** (`tests/lab-matrix.sh`, T1–T12: `apply`/`rollback` von Konfiguration, `pg_hba.conf` mit Aussperrschutz, SQL,
-  manipuliertes Journal, entfernte Verbindung, Katalog-Sichtbarkeit, `rollback` mit geschlossener Ausgabe) und **Sichtbarkeitsprobe** (`tests/lab-visibility.sh`) liefern auf
+- **Regressionsläufe** (`tests/lab-matrix.sh`, T1–T14: `apply`/`rollback` von Konfiguration, `pg_hba.conf` mit Aussperrschutz, SQL,
+  manipuliertes Journal, entfernte Verbindung, Katalog-Sichtbarkeit, `rollback` mit geschlossener Ausgabe, wiederholter `rollback` nach
+  einem unvollständigen mit und ohne Neuladen (T13, T13b), Identität beim Schreiben als root mit einem Link des Dienstkontos nach `/etc`
+  (T14, `tests/lab-identity.php`)) und **Sichtbarkeitsprobe** (`tests/lab-visibility.sh`) liefern auf
   allen sechs Versionen dasselbe Ergebnis — bis auf eine Abweichung in T7: in 14 braucht `db.public_schema_create` eine zusätzliche
   Anweisung (siehe die Tabelle unten, Zeile `db.public_schema_create`).
 - **`pg_upgrade` und Wiederherstellung** (`tests/lab-upgrade.sh`, nicht Teil der Matrix, einzeln gelaufen): Der Entzug aus
@@ -32,7 +35,9 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
 - `os.service_unit` und `os.package_source` sind im Container **nicht geprüft** (PID 1 ist kein systemd-Dienst, `/proc/1/exe` nicht
   lesbar) — auf allen Versionen gleich; die Tabelle weist sie so aus, nicht als `pass`. Am 24.10.2026 wurden dieselben Regeln mit
   Programmstand 0.3.0 auf einem Debian-13-System mit systemd (PostgreSQL 18, PGDG-Pakete) und auf Windows 11 (PostgreSQL 18) einzeln
-  gefahren; diese Läufe sind nicht Teil dieser Tabelle.
+  gefahren; diese Läufe sind nicht Teil dieser Tabelle. Am 25.10.2026 liefen `apply` und `rollback` mit Programmstand 0.3.1 zusätzlich
+  einzeln auf dem Paket-Layout von Debian 13 (PostgreSQL 17 aus den Debian-Paketen, Konfiguration unter `/etc/postgresql/17/main` im
+  Besitz von `postgres`, Container ohne systemd).
 - Nicht in dieser Matrix: Windows mit 14 bis 17, andere Linux-Familien als Debian/Alpine, Cluster mit Replikation.
 
 ## Status je Regel und Version

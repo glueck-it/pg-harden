@@ -22,6 +22,32 @@ grep -c "include_dir = 'conf.d'" $D/postgresql.conf; ls $D/conf.d 2>&1 | head -2
 say "T3 rollback twice is refused"
 php pg-harden.php rollback $H --dir=/tmp/m1 > /tmp/rb.out 2>&1; grep -e '\[' -e '^pg-harden:' -e '^Rückweg' /tmp/rb.out | head -2
 
+# T13 runs here, not at the end: it needs the clean state after T2 (no conf.d yet) — T8 deliberately leaves an apply in place.
+expect() { if [ "$2" = "$3" ]; then echo "OK: $1 = $2"; else echo "FEHLER: $1 = $2 (erwartet: $3)"; fi; }
+temp_public() { psql -U postgres -Atc "select has_database_privilege('public','postgres','TEMP')"; }
+# t13 <journal> <reload: yes|no>: apply, then the state an interrupted rollback leaves behind (every journal file restored or removed,
+# SQL way back not run, no rollback-log.json; with "no" also not reloaded), then the same rollback once more
+t13() {
+  rm -rf "$1"; php pg-harden.php apply $H --include-confirm=db.public_temp --execute --yes --dir="$1" > "$1.out" 2>&1; echo "apply exit=$?"
+  expect "apply legt conf.d an (Vorbedingung)" "$(php -r '$d = json_decode(file_get_contents($argv[1] . "/apply-log.json"), true);
+    foreach ($d["files"] as $f) { if ($f["action"] === "created" && str_ends_with($f["path"], "/conf.d")) { echo "ja"; } }' "$1")" ja
+  php -r '$d = json_decode(file_get_contents($argv[1] . "/apply-log.json"), true); foreach (array_reverse($d["files"]) as $f) {
+    $ok = $f["action"] === "modified" ? copy($argv[1] . "/" . $f["backup"], $f["path"]) : (is_dir($f["path"]) ? rmdir($f["path"]) : unlink($f["path"]));
+    $ok || exit(1); }' "$1" && echo "OK: Abbruch nachgestellt" || echo "FEHLER: Abbruch nicht nachstellbar"
+  [ "$2" = yes ] && psql -U postgres -Atc "select pg_reload_conf()" >/dev/null
+  expect "PUBLIC TEMP vor dem zweiten rollback" "$(temp_public)" f
+  php pg-harden.php rollback $H --dir="$1" > /tmp/rb.out 2>&1; expect "rollback exit" "$?" 0
+  grep -e '\[' -e '^pg-harden:' -e '^Rückweg' /tmp/rb.out | head -6 | cut -c1-150
+  expect "rollback-log.json" "$(test -f "$1/rollback-log.json" && echo vorhanden)" vorhanden
+  expect "PUBLIC TEMP nach dem zweiten rollback" "$(temp_public)" t
+  expect "include_dir in postgresql.conf" "$(grep -c "^include_dir = 'conf.d'" $D/postgresql.conf)" 0
+  expect "conf.d" "$(test -d $D/conf.d && echo vorhanden || echo fehlt)" fehlt
+}
+say "T13 rollback after an interrupted one (files already restored, conf.d gone, reloaded, SQL way back not run) completes"
+t13 /tmp/m13 yes
+say "T13b the same, interrupted before the reload"
+t13 /tmp/m13b no
+
 say "T4 SCRAM roles for hba tests"
 psql -U postgres -v ON_ERROR_STOP=1 -f /tmp/scram.sql >/dev/null && echo roles-ok
 
@@ -67,3 +93,6 @@ rm -rf /tmp/m12; PGPASSWORD=Test-pw-1 php pg-harden.php apply $H --include-confi
 echo "rollback exit=$(cat /tmp/m12.rc)"
 test -f /tmp/m12/rollback-log.json && echo "OK: rollback-log.json vorhanden" || echo "FEHLER: rollback unvollständig"
 if psql -w -h 127.0.0.1 -U postgres -Atc "select 1" >/dev/null 2>&1; then echo "OK: Anmeldung ohne Passwort wieder möglich (neu geladen)"; else echo "FEHLER: Anmeldung scheitert — nicht neu geladen"; fi
+
+say "T14 identity for writing as root (tests/lab-identity.php): root only where nobody else can change the way"
+php tests/lab-identity.php; echo "exit=$?"
