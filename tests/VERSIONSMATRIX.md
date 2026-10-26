@@ -37,7 +37,8 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
   Programmstand 0.3.0 auf einem Debian-13-System mit systemd (PostgreSQL 18, PGDG-Pakete) und auf Windows 11 (PostgreSQL 18) einzeln
   gefahren; diese Läufe sind nicht Teil dieser Tabelle. Am 25.10.2026 liefen `apply` und `rollback` mit Programmstand 0.3.1 zusätzlich
   einzeln auf dem Paket-Layout von Debian 13 (PostgreSQL 17 aus den Debian-Paketen, Konfiguration unter `/etc/postgresql/17/main` im
-  Besitz von `postgres`, Container ohne systemd).
+  Besitz von `postgres`, Container ohne systemd). Am 26.10.2026 liefen `check`, `apply`, `rollback` und ein wiederholter `rollback` nach
+  einem nachgestellten Abbruch mit Programmstand 0.3.1 auf Windows 11 (PostgreSQL 18.6, Wegwerf-Cluster mit `initdb`).
 - Nicht in dieser Matrix: Windows mit 14 bis 17, andere Linux-Familien als Debian/Alpine, Cluster mit Replikation.
 
 ## Status je Regel und Version
