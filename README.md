@@ -282,13 +282,17 @@ Operating-system rules, `apply` and `rollback` need access to the server's files
 in and run as root there. Practise against `lab/` only — never against production systems.
 
 `tests/` contains `allowlist-test.php` (unit test of the allowlist that `apply` and `rollback` pass SQL through: `php tests/allowlist-test.php`),
-`lab-matrix.sh` (regression run of `apply`/`rollback` in a container, calls `lab-identity.php` for the identity rule when writing as root),
+`lab-matrix.sh` (regression run of `apply`/`rollback` in a container, calls `lab-identity.php` for the identity rules when writing and reading as root),
 `lab-visibility.sh` and `lab-upgrade.sh` (catalog visibility, `pg_upgrade`,
 restore) and `run-version-matrix.sh` with `matrix-table.php` (version matrix, result in [tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)). The
 container scripts change passwords, roles and databases and only start with `PGHARDEN_LAB=1` — **run them only in a throw-away container**, never
 against an instance with real data.
 
 ## Status
+
+0.3.2 (2026-10-26): **security fix** for `check` and `client` as root (another account could make them read a file of root through a
+link, steer the process probes to a foreign process via `postmaster.pid`, or stop `check` with a FIFO); files of other accounts are now
+read with that account's identity. Details in [CHANGELOG.md](CHANGELOG.md).
 
 0.3.1 (2026-10-25): **security fix** for `apply`/`rollback` as root (the service account could redirect a write into a directory of root and
 gain root rights that way; after updating, check as described in [CHANGELOG.md](CHANGELOG.md)), fix for `rollback` in a

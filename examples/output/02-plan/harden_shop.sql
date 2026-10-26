@@ -1,4 +1,4 @@
--- pg-harden 0.3.1 — für Datenbank shop, erzeugt 2026-10-25 22:10
+-- pg-harden 0.3.2 — für Datenbank shop, erzeugt 2026-10-26 16:10
 -- Automatisch erzeugter Vorschlag. Auswirkungen auf Anwendungen vor dem Ausführen in einer Testumgebung prüfen.
 -- Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.
 -- Ausführen: Verbindung zur Zieldatenbank selbst herstellen, dann mit -v ON_ERROR_STOP=1 -f harden_shop.sql einspielen.

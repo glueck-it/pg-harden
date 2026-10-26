@@ -1,6 +1,6 @@
 # Manuelle Maßnahmen
 
-Erzeugt von pg-harden 0.3.1 am 25.10.2026 22:10.
+Erzeugt von pg-harden 0.3.2 am 26.10.2026 16:10.
 
 Automatisch erzeugter Vorschlag. Auswirkungen auf Anwendungen vor dem Ausführen in einer Testumgebung prüfen. Der Plan enthält Rollen-, Objekt- und Netznamen: vertraulich ablegen.
 

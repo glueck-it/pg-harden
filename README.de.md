@@ -307,13 +307,17 @@ das Verzeichnis hineinkopieren und als root im Container ausführen. Übungen nu
 ## Tests
 
 `tests/` enthält: `allowlist-test.php` (Unit-Test der Allowlist, die `apply` und `rollback` passieren müssen; `php tests/allowlist-test.php`),
-`lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container, ruft `lab-identity.php` für die Identitätsregel beim Schreiben als
+`lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container, ruft `lab-identity.php` für die Identitätsregeln beim Schreiben und Lesen als
 root auf), `lab-visibility.sh` und `lab-upgrade.sh` (Katalog-Sichtbarkeit,
 `pg_upgrade`, Wiederherstellung) und `run-version-matrix.sh` mit `matrix-table.php` (Versionsmatrix, Ergebnis in `VERSIONSMATRIX.md`).
 Die Container-Skripte ändern Passwörter, Rollen und Datenbanken und starten nur mit `PGHARDEN_LAB=1` — **ausschließlich in einem
 Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
 
 ## Stand
+
+0.3.2 (26.10.2026): **Sicherheitskorrektur** für `check` und `client` als root (ein anderes Konto konnte sie über einen Link eine Datei
+von root lesen lassen, die Prozessprüfungen über `postmaster.pid` auf einen fremden Prozess lenken oder `check` mit einer FIFO anhalten);
+Dateien anderer Konten werden jetzt mit deren Identität gelesen. Einzelheiten in [CHANGELOG.md](CHANGELOG.md) (englisch).
 
 0.3.1 (25.10.2026): **Sicherheitskorrektur** für `apply`/`rollback` als root (das Dienstkonto konnte einen Schreibvorgang in ein Verzeichnis
 von root umlenken und so root-Rechte erlangen; nach dem Update prüfen wie im [CHANGELOG.md](CHANGELOG.md) beschrieben),

@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.2 (2026-10-26)
 
-- **Security fix for `check` and `client` run as root.** Affected: 0.3.1 and earlier on Linux and other Unix systems; reproduced
-  against 0.3.1 in a test container. Both commands read files that another account controls, and they read them as root:
+- **Security fix — update if you run `check` or `client` as root.** Affected: 0.3.0 and 0.3.1 on Linux and other Unix systems;
+  reproduced against 0.3.1 in a test container. Both commands change no configuration on the host; the only thing they write is the
+  report (`--out`). Reports written as root may contain such findings (places, kinds of finding, variable names; no values) — review or
+  regenerate them with 0.3.2. Both commands read files that another account controls, and they read them as root:
   - `client --user=<account>`: the account could link its `.pgpass` (or a service file, certificate or script) to a file only root may
     read — the report then showed findings from root's file as the account's own (places and kinds of finding; values are not printed).
   - `check`: the service account could write any process number into `postmaster.pid`; the process probes then read the environment
@@ -13,11 +15,12 @@
   The way it works now: such files are read with the identity of the account that controls the way to them (the same walk from `/` as
   for writing). A directory of root that group or others can write — for example `/tmp` — is not refused for reading: with the sticky
   bit an existing entry decides by its owner (a file or link of root there is read as `nobody`, since anybody may have placed a hard link
-  to it), otherwise the file is read as `nobody`. Every read opens without blocking and accepts only a regular file within a size limit. The process number counts only when
-  it is the parent of the tool's own database connection; on Linux both processes must also run as the owner of the data directory and
-  the start time must match the server's (`/proc`), on Windows the parent is checked in the process list. Otherwise the process probes
-  report "nicht geprüft". Windows has no identity switch: whether a junction on the way can redirect a read of `client --user` or a write
-  of `apply` there is examined next. Tests in `tests/lab-identity.php` (T14); checked against PostgreSQL 18 on Alpine and on Windows 11.
+  to it), otherwise the file is read as `nobody`. Every read opens only a regular file, without blocking and within a size limit. The
+  process number counts only when it is the parent of the tool's own database connection; on Linux both processes must also run as the
+  owner of the data directory and the start time must match the server's (`/proc`), on Windows the parent is checked in the process
+  list. Otherwise the process probes report "nicht geprüft". Windows has no identity switch: whether a junction on the way can redirect a
+  read of `client --user` or a write of `apply` there is examined next. Tests: `tests/lab-identity.php` (T14) and T15 in
+  `tests/lab-matrix.sh` (forged process number, FIFO); version matrix PostgreSQL 14 to 19rc1, Windows 11 with PostgreSQL 18.
 
 ## 0.3.1 (2026-10-25)
 
