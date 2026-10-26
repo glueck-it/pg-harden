@@ -51,10 +51,22 @@ final class Fs
    */
   public static function asOwnerOf(string $path, callable $fn): mixed
   {
+    return self::runAs(fn() => self::writerFor($path), $fn);
+  }
+
+  /** As asOwnerOf, but with the identity readerFor chooses: for reading files another account may control (check, client). */
+  public static function asReaderOf(string $path, callable $fn): mixed
+  {
+    return self::runAs(fn() => self::readerFor($path), $fn);
+  }
+
+  /** @param callable(): ?array $who identity for root, null: root itself */
+  private static function runAs(callable $who, callable $fn): mixed
+  {
     if (Platform::windows() || !function_exists('posix_geteuid') || posix_geteuid() !== 0) {
       return $fn();
     }
-    $st = self::writerFor($path);
+    $st = $who();
     if ($st === null) {
       return $fn();
     }
@@ -111,7 +123,25 @@ final class Fs
    */
   public static function readServerFile(string $path, int $max = 5242880): ?string
   {
-    return self::asOwnerOf($path, fn() => self::attempt(fn() => is_file($path)) === true ? self::read($path, $max) : null);
+    return self::asOwnerOf($path, fn() => self::read($path, $max));
+  }
+
+  /**
+   * Reads a file another account may control, for check and client (postmaster.pid, unit files, a person's .pgpass, scripts):
+   * with the identity readerFor chooses, only a regular file, at most $max bytes. A link the account planted to a file of root
+   * then reaches only what that account can read; null also when no identity can be determined.
+   */
+  public static function readGuarded(string $path, int $max = 5242880): ?string
+  {
+    // A relative path (PGPASSFILE=x) counts from the working directory, as for libpq; the walk needs it absolute.
+    if (!Platform::windows() && !str_starts_with($path, '/') && ($cwd = self::attempt(fn() => getcwd())) !== null) {
+      $path = rtrim($cwd, '/') . '/' . $path;
+    }
+    try {
+      return self::asReaderOf($path, fn() => self::read($path, $max));
+    } catch (HardenException) {
+      return null;
+    }
   }
 
   /**
@@ -127,6 +157,27 @@ final class Fs
    */
   public static function writerFor(string $path): ?array
   {
+    return self::walk($path, false);
+  }
+
+  /**
+   * The identity root takes on to READ $path in check and client — writerFor's walk with one difference: a directory of root that
+   * group or others may write to is not refused (a check must not stop at /tmp), it hands the decision on. With the sticky bit
+   * only the owner of an entry may rename or remove it, so an existing next entry decides by its owner (a directory of root: the walk
+   * goes on; a file or link of root: "nobody", see walk); a missing one could be created by anybody later, and without the sticky bit
+   * anybody can swap any name — both are read as "nobody". An owner without an own account and group is read as "nobody" as well.
+   * Only for root on Unix (asReaderOf).
+   *
+   * @return array{uid: int, gid: int, name: string}|null null: root may read it itself
+   */
+  public static function readerFor(string $path): ?array
+  {
+    return self::walk($path, true);
+  }
+
+  /** @return array{uid: int, gid: int, name: string}|null */
+  private static function walk(string $path, bool $read): ?array
+  {
     // Unix only: "\" is an ordinary character in a name there, replacing it would walk a different way than the kernel.
     if (!str_starts_with($path, '/')) {
       throw new HardenException('Pfad ist nicht absolut: ' . Text::printable($path) . ' — nichts geändert.');
@@ -140,13 +191,18 @@ final class Fs
         throw new HardenException('Verzeichnis ' . Text::printable($cur) . ' auf dem Weg zu ' . Text::printable($path) . ' ist nicht prüfbar — nichts geändert.');
       }
       if ($st['uid'] !== 0) {
-        return self::identity($st['uid']);
+        return self::identity($st['uid'], $read);
       }
-      if (($st['mode'] & 0022) !== 0) {
+      // Reading through a directory others may write to: the next entry decides (sticky bit), or nobody does.
+      $shared = ($st['mode'] & 0022) !== 0;
+      if ($shared && !$read) {
         throw new HardenException('Verzeichnis ' . Text::printable($cur) . ' auf dem Weg zu ' . Text::printable($path) . ' ist für Gruppe oder andere beschreibbar — nichts geändert.');
       }
       if ($todo === []) {
         return null;
+      }
+      if ($shared && ($st['mode'] & 01000) === 0) {
+        return self::nobody();
       }
       $name = array_shift($todo);
       if ($name === '..') {
@@ -156,19 +212,30 @@ final class Fs
       $next = rtrim($cur, '/') . '/' . $name;
       $lst = self::attempt(fn() => lstat($next));
       if ($lst === null) {
+        if ($shared) {
+          return self::nobody();
+        }
         // Missing inside a root-only directory: only root could create it, so root may.
         if (self::definitelyAbsent($next)) {
           return null;
         }
         throw new HardenException('Eintrag ' . Text::printable($next) . ' ist nicht prüfbar — nichts geändert.');
       }
+      if ($shared && $lst['uid'] !== 0) {
+        return self::identity($lst['uid'], true);
+      }
       $type = $lst['mode'] & 0170000;
+      // A file or link of root there may be a name somebody else chose: a hard link to a file of root (fs.protected_hardlinks=0),
+      // still or no longer the file's other name. Only a directory of root goes on as root (it cannot be hard-linked).
+      if ($shared && $type !== 0040000) {
+        return self::nobody();
+      }
       if ($type === 0120000) {
         $target = self::attempt(fn() => readlink($next));
         if ($target === null || ++$links > 40) {
           throw new HardenException('Link ' . Text::printable($next) . ' ist nicht auflösbar — nichts geändert.');
         }
-        $todo =array_merge(array_values(array_filter(explode('/', $target), fn($s) => $s !== '' && $s !== '.')), $todo);
+        $todo = array_merge(array_values(array_filter(explode('/', $target), fn($s) => $s !== '' && $s !== '.')), $todo);
         if (str_starts_with($target, '/')) {
           $cur = '/';
         }
@@ -181,22 +248,38 @@ final class Fs
       if ($todo !== []) {
         throw new HardenException(Text::printable($next) . ' ist kein Verzeichnis — nichts geändert.');
       }
-      return $lst['uid'] === 0 ? null : self::identity($lst['uid']);
+      return $lst['uid'] === 0 ? null : self::identity($lst['uid'], $read);
     }
   }
 
   /**
    * The account with its own primary group, not the group of a file: a directory "postgres:root" must not lend the root group.
-   * An owner without an account entry has no group list to take on — refused.
+   * An owner without an account entry has no group list to take on — refused for writing, "nobody" for reading.
    * @return array{uid: int, gid: int, name: string}
    */
-  private static function identity(int $uid): array
+  private static function identity(int $uid, bool $read = false): array
   {
     $pw = function_exists('posix_getpwuid') ? posix_getpwuid($uid) : false;
     if (!is_array($pw) || (int) $pw['gid'] === 0) {
+      if ($read) {
+        return self::nobody();
+      }
       throw new HardenException('Besitzer ' . $uid . ' hat kein eigenes Konto mit eigener Gruppe — mit dieser Identität wird nicht geschrieben, nichts geändert.');
     }
     return ['uid' => $uid, 'gid' => (int) $pw['gid'], 'name' => (string) $pw['name']];
+  }
+
+  /**
+   * The account without rights for reading where no owner can be named: whatever was planted there reaches only what everybody may read.
+   * @return array{uid: int, gid: int, name: string}
+   */
+  private static function nobody(): array
+  {
+    $pw = function_exists('posix_getpwnam') ? posix_getpwnam('nobody') : false;
+    if (!is_array($pw) || (int) $pw['uid'] === 0 || (int) $pw['gid'] === 0) {
+      throw new HardenException('Konto nobody fehlt — eine Datei, deren Besitzer nicht feststeht, wird nicht gelesen.');
+    }
+    return ['uid' => (int) $pw['uid'], 'gid' => (int) $pw['gid'], 'name' => 'nobody'];
   }
 
   /**
@@ -218,15 +301,34 @@ final class Fs
     return false;
   }
 
-  /** Reads at most $max bytes; null if the file is unreadable or bigger. */
+  /**
+   * Reads at most $max bytes of a regular file; null if it is missing, unreadable, bigger or no regular file. Opened without
+   * blocking ("n") and judged by fstat on that handle: a FIFO planted in its place would otherwise hang the run in open(), a device
+   * would deliver without end. Files in /proc report the size 0 and are read up to $max.
+   */
   public static function read(string $path, int $max = 5242880): ?string
   {
-    $size = self::attempt(fn() => filesize($path));
-    if ($size === null || $size > $max) {
+    // Only a regular file is opened at all (opening a device can act on it, a tape rewinds on close); the handle must then be that file.
+    $before = self::attempt(fn() => stat($path));
+    if ($before === null || ($before['mode'] & 0170000) !== 0100000 || $before['size'] > $max) {
       return null;
     }
-    $content = self::attempt(fn() => file_get_contents($path, false, null, 0, $max));
-    return $content === null ? null : $content;
+    $fh = self::attempt(fn() => fopen($path, 'rbn'));
+    if ($fh === null) {
+      return null;
+    }
+    try {
+      $st = self::attempt(fn() => fstat($fh));
+      if ($st === null || ($st['mode'] & 0170000) !== 0100000 || $st['size'] > $max || $st['dev'] !== $before['dev'] || $st['ino'] !== $before['ino']) {
+        return null;
+      }
+      // Regular files never block; Windows cannot switch the mode for files and reports false — not an error.
+      self::attempt(fn() => stream_set_blocking($fh, true));
+      $content = self::attempt(fn() => stream_get_contents($fh, $max + 1));
+      return $content === null || strlen($content) > $max ? null : $content;
+    } finally {
+      fclose($fh);
+    }
   }
 
   /** Octal text such as "0600" as reported by pg_settings; anything else counts as unknown. */
@@ -375,8 +477,16 @@ final class LocalServer
     'ssl', 'ssl_key_file', 'ssl_cert_file', 'logging_collector', 'log_directory', 'archive_mode',
   ];
 
+  public const UNPROVEN = 'die Prozessnummer aus postmaster.pid passt nicht zum Elternprozess der eigenen Verbindung, zum Besitzer des Datenverzeichnisses oder zur Startzeit des Servers (/proc)';
+
+  /**
+   * $pid comes from postmaster.pid, a file of the service account: on Linux it counts only when proven() confirms it from /proc
+   * (written by the kernel), otherwise it is null — the process probes would read another process as root. On Windows
+   * WindowsFacts proves the same relation before it uses the process.
+   */
   private function __construct(
-    public readonly int $pid,
+    public readonly ?int $pid,
+    public readonly int $backendPid,
     public readonly string $dataDir,
     public readonly array $settings,
   ) {}
@@ -401,7 +511,8 @@ final class LocalServer
   {
     $rows = Connector::readOnly($pdo, 'SELECT name, setting FROM pg_settings WHERE name = ANY (string_to_array(:names, \',\'))', ['names' => implode(',', self::SETTINGS)]);
     $settings = array_column($rows, 'setting', 'name');
-    $start = (int) Connector::readOnly($pdo, 'SELECT extract(epoch FROM pg_postmaster_start_time())::bigint AS t')[0]['t'];
+    $own = Connector::readOnly($pdo, 'SELECT extract(epoch FROM pg_postmaster_start_time())::bigint AS t, pg_backend_pid() AS backend')[0];
+    $start = (int) $own['t'];
     $dir = (string) ($settings['data_directory'] ?? '');
     if ($dir === '') {
       return [null, 'Datenverzeichnis nicht sichtbar', true];
@@ -412,7 +523,8 @@ final class LocalServer
       }
       return [null, 'Das Datenverzeichnis ist von hier aus nicht sichtbar (fehlende Rechte?) — als Dienstkonto bzw. mit Administrator-/root-Rechten ausführen', true];
     }
-    $content = Fs::attempt(fn() => file_get_contents($dir . '/postmaster.pid'));
+    // Read with the service account's identity (its directory): a link or FIFO it placed there reaches only what it may read itself.
+    $content = Fs::readGuarded($dir . '/postmaster.pid', 4096);
     if ($content === null) {
       return [null, 'postmaster.pid nicht lesbar — als Dienstkonto bzw. mit Administrator-/root-Rechten ausführen, um die Zugehörigkeit zu prüfen', true];
     }
@@ -424,7 +536,46 @@ final class LocalServer
     if (!$same) {
       return [null, 'postmaster.pid dieses Rechners gehört nicht zur verbundenen Instanz (anderer Server oder Container) — Betriebssystem-Regeln nur auf dem Server selbst', false];
     }
-    return [new self((int) $lines[0], $dir, $settings), 'lokal (Prozess ' . (int) $lines[0] . ')', false];
+    $pid = (int) $lines[0];
+    $backend = (int) $own['backend'];
+    if (Platform::windows()) {
+      return [new self($pid, $backend, $dir, $settings), 'lokal (Prozess ' . $pid . ', Nachweis über die Prozessliste)', false];
+    }
+    return self::proven($pid, $backend, $dir, $start)
+      ? [new self($pid, $backend, $dir, $settings), 'lokal (Prozess ' . $pid . ')', false]
+      : [new self(null, $backend, $dir, $settings), 'lokal (Serverprozess nicht nachgewiesen — ' . self::UNPROVEN . ')', false];
+  }
+
+  /**
+   * Linux: $pid is the server only if it is the parent of our own backend, both run as the owner of the data directory (PostgreSQL
+   * refuses any other) and it started when the server says it did. The parent alone is not enough: in another PID namespace (server in
+   * a container, data directory mounted on the host under the same path) the backend's number names a foreign process of the host,
+   * whose parent the service account could copy into postmaster.pid.
+   */
+  private static function proven(int $pid, int $backend, string $dir, int $start): bool
+  {
+    $status = Fs::read("/proc/$backend/status", 65536);
+    if ($status === null || preg_match('/^PPid:\s+(\d+)$/m', $status, $m) !== 1 || (int) $m[1] !== $pid) {
+      return false;
+    }
+    $owner = Fs::attempt(fn() => stat($dir))['uid'] ?? null;
+    if ($owner === null || Fs::attempt(fn() => fileowner("/proc/$pid")) !== $owner || Fs::attempt(fn() => fileowner("/proc/$backend")) !== $owner) {
+      return false;
+    }
+    // Field 22 of /proc/<pid>/stat: start in clock ticks after boot (btime in /proc/stat). The name in field 2 may contain blanks and
+    // parentheses, so the fields are counted after the last ")".
+    $stat = Fs::read("/proc/$pid/stat", 65536);
+    $boot = Fs::read('/proc/stat', 1048576);
+    if ($stat === null || $boot === null || preg_match('/^btime\s+(\d+)$/m', $boot, $b) !== 1) {
+      return false;
+    }
+    $fields = preg_split('/\s+/', trim(substr($stat, (int) strrpos($stat, ')') + 1)));
+    $ticks = function_exists('posix_sysconf') && defined('POSIX_SC_CLK_TCK') ? (int) posix_sysconf(POSIX_SC_CLK_TCK) : 100;
+    if (!isset($fields[19]) || $ticks <= 0) {
+      return false;
+    }
+    // 3 s: btime, the tick division and the server's start time each lose fractions of a second.
+    return abs((int) $b[1] + intdiv((int) $fields[19], $ticks) - $start) <= 3;
   }
 }
 
@@ -446,6 +597,11 @@ final class WindowsFacts
     $script = <<<'PS'
       $res = @{ service = $null; signature = $null; acls = @() }
       try {
+        # The process number comes from postmaster.pid (a file of the service account): it counts only as the parent of our own backend.
+        $b = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$d.backend)
+        if (-not $b -or [int]$b.ParentProcessId -ne [int]$d.pid) {
+          throw 'Serverprozess nicht nachgewiesen (die Prozessnummer aus postmaster.pid ist nicht der Elternprozess der eigenen Verbindung)'
+        }
         $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$d.pid)
         # The Windows service is often the parent (pg_ctl runservice starts the postmaster): walk up a few levels.
         $chain = @([int]$d.pid)
@@ -478,7 +634,7 @@ final class WindowsFacts
       }
       ConvertTo-Json -InputObject $res -Depth 6 -Compress
       PS;
-    return self::$cache = Platform::powershell($script, ['pid' => $s->pid, 'paths' => $paths]);
+    return self::$cache = Platform::powershell($script, ['pid' => $s->pid, 'backend' => $s->backendPid, 'paths' => $paths]);
   }
 
   /**
@@ -787,11 +943,23 @@ final class OsProbes
     }
   }
 
+  /** The proven server process; null with an "unchecked" line naming what stays unchecked. */
+  private static function pid(LocalServer $s, array &$r, string $what): ?int
+  {
+    if ($s->pid === null) {
+      $r['unchecked'][] = $what . ': Serverprozess nicht nachgewiesen (' . LocalServer::UNPROVEN . ')';
+    }
+    return $s->pid;
+  }
+
   private static function umask(LocalServer $s, array &$r): void
   {
-    $status = Fs::attempt(fn() => file_get_contents("/proc/{$s->pid}/status"));
-    if ($status === null || preg_match('/^Umask:\s+([0-7]+)/m', (string) $status, $m) !== 1) {
-      $r['unchecked'][] = 'umask des Serverprozesses nicht lesbar (/proc/' . $s->pid . '/status)';
+    if (($pid = self::pid($s, $r, 'umask des Serverprozesses')) === null) {
+      return;
+    }
+    $status = Fs::read("/proc/$pid/status", 65536);
+    if ($status === null || preg_match('/^Umask:\s+([0-7]+)/m', $status, $m) !== 1) {
+      $r['unchecked'][] = 'umask des Serverprozesses nicht lesbar (/proc/' . $pid . '/status)';
       return;
     }
     if ((intval($m[1], 8) & 0007) !== 0007) {
@@ -814,7 +982,10 @@ final class OsProbes
       }
       return;
     }
-    $uid = Fs::attempt(fn() => fileowner("/proc/{$s->pid}"));
+    if (($pid = self::pid($s, $r, 'Dienstkonto')) === null) {
+      return;
+    }
+    $uid = Fs::attempt(fn() => fileowner("/proc/$pid"));
     if ($uid === null) {
       $r['unchecked'][] = 'Besitzer des Serverprozesses nicht ermittelbar';
       return;
@@ -827,20 +998,23 @@ final class OsProbes
 
   private static function serviceUnit(LocalServer $s, array &$r): void
   {
-    $cgroup = Fs::attempt(fn() => file_get_contents("/proc/{$s->pid}/cgroup"));
-    $environ = Fs::attempt(fn() => file_get_contents("/proc/{$s->pid}/environ"));
+    if (($pid = self::pid($s, $r, 'Umgebung und Dienstdatei')) === null) {
+      return;
+    }
+    $cgroup = Fs::read("/proc/$pid/cgroup", 65536);
+    $environ = Fs::read("/proc/$pid/environ", 1048576);
     if ($environ === null) {
-      $r['unchecked'][] = 'Umgebung des Serverprozesses nicht lesbar (/proc/' . $s->pid . '/environ — root bzw. Dienstkonto nötig)';
+      $r['unchecked'][] = 'Umgebung des Serverprozesses nicht lesbar (/proc/' . $pid . '/environ — root bzw. Dienstkonto nötig)';
     }
     if ($environ !== null) {
-      foreach (explode("\0", (string) $environ) as $var) {
+      foreach (explode("\0", $environ) as $var) {
         $name = strtok($var, '=');
         if (is_string($name) && preg_match('/^(PGPASSWORD|PGPASSFILE_CONTENT|.*PASSWORD.*)$/i', $name) === 1) {
-          self::finding($r, "/proc/{$s->pid}/environ", "Umgebung des Serverprozesses enthält $name (Wert wird nicht ausgegeben)");
+          self::finding($r, "/proc/$pid/environ", "Umgebung des Serverprozesses enthält $name (Wert wird nicht ausgegeben)");
         }
       }
     }
-    if ($cgroup === null || preg_match('~/([A-Za-z0-9@:._\\\\-]+\.service)\s*$~m', (string) $cgroup, $m) !== 1) {
+    if ($cgroup === null || preg_match('~/([A-Za-z0-9@:._\\\\-]+\.service)\s*$~m', $cgroup, $m) !== 1) {
       $r['notes'][] = 'Kein systemd-Dienst ermittelt — Dienstdatei nicht geprüft';
       return;
     }
@@ -875,8 +1049,12 @@ final class OsProbes
     if ($st !== null && ($st['mode'] & 0022) !== 0) {
       self::finding($r, $file, 'Dienstdatei ist für Gruppe oder andere beschreibbar (Modus ' . self::mode($st['mode']) . ')');
     }
-    $lines = Fs::attempt(fn() => file($file, FILE_IGNORE_NEW_LINES)) ?? [];
-    foreach ($lines as $i => $line) {
+    $content = Fs::readGuarded($file, 1048576);
+    if ($content === null) {
+      $r['unchecked'][] = Text::printable($file) . ': nicht lesbar';
+      return;
+    }
+    foreach (preg_split('/\r\n|\n|\r/', $content) as $i => $line) {
       $n = $i + 1;
       if (preg_match('/^\s*Environment(File)?\s*=\s*(.*)$/i', $line, $m) === 1) {
         if ($m[1] === '' && preg_match('/\b(\w*PASSWORD\w*|\w*PASSWD\w*|\w*SECRET\w*)\s*=/i', $m[2], $k) === 1) {
@@ -971,9 +1149,12 @@ final class OsProbes
       }
       return;
     }
-    $exe = Fs::attempt(fn() => readlink("/proc/{$s->pid}/exe"));
+    if (($pid = self::pid($s, $r, 'Paketherkunft')) === null) {
+      return;
+    }
+    $exe = Fs::attempt(fn() => readlink("/proc/$pid/exe"));
     if ($exe === null) {
-      $r['unchecked'][] = 'Programmdatei des Serverprozesses nicht ermittelbar (/proc/' . $s->pid . '/exe — root nötig)';
+      $r['unchecked'][] = 'Programmdatei des Serverprozesses nicht ermittelbar (/proc/' . $pid . '/exe — root nötig)';
       return;
     }
     $exe = preg_replace('/ \(deleted\)$/', '', $exe);

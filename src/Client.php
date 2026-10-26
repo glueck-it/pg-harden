@@ -147,7 +147,7 @@ final class SecretScan
       $this->skipped[] = $path . ' (größer als 1 MiB)';
       return [];
     }
-    $content = Fs::attempt(fn() => file_get_contents($path));
+    $content = Fs::readGuarded($path, self::MAX_BYTES);
     if ($content === null) {
       $this->skipped[] = $path . ' (nicht lesbar)';
       return [];
@@ -426,7 +426,7 @@ final class ClientProbes
       return;
     }
     foreach ($files as $file) {
-      $content = Fs::read($file);
+      $content = Fs::readGuarded($file);
       if ($content === null) {
         $r['unchecked'][] = Text::printable($file) . ': nicht lesbar oder größer als 5 MiB';
         continue;
@@ -498,7 +498,7 @@ final class ClientProbes
    */
   private static function pgpassLines(string $file): ?array
   {
-    $content = Fs::read($file);
+    $content = Fs::readGuarded($file);
     if ($content === null) {
       return null;
     }
@@ -736,7 +736,7 @@ final class ClientProbes
       return;
     }
     foreach ($files as $file) {
-      $pem = Fs::read($file, 1048576);
+      $pem = Fs::readGuarded($file, 1048576);
       $info = $pem === null ? null : Fs::attempt(fn() => openssl_x509_parse($pem));
       if (!is_array($info)) {
         $r['unchecked'][] = Text::printable($file) . ': Zertifikat nicht lesbar';

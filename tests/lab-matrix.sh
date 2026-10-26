@@ -94,5 +94,22 @@ echo "rollback exit=$(cat /tmp/m12.rc)"
 test -f /tmp/m12/rollback-log.json && echo "OK: rollback-log.json vorhanden" || echo "FEHLER: rollback unvollständig"
 if psql -w -h 127.0.0.1 -U postgres -Atc "select 1" >/dev/null 2>&1; then echo "OK: Anmeldung ohne Passwort wieder möglich (neu geladen)"; else echo "FEHLER: Anmeldung scheitert — nicht neu geladen"; fi
 
-say "T14 identity for writing as root (tests/lab-identity.php): root only where nobody else can change the way"
+say "T14 identity for writing and reading as root (tests/lab-identity.php): writing only where nobody else can change the way, reading as the account that can (sticky directory: owner of the entry, otherwise nobody)"
 php tests/lab-identity.php; echo "exit=$?"
+
+# The service account controls postmaster.pid: a process number of its choice must not steer root's reads, a FIFO must not hang check.
+say "T15 check as root with a forged postmaster.pid: foreign process not read, FIFO refused at once"
+cp "$D/postmaster.pid" /tmp/pid.bak
+env PGH_T15_PASSWORD=x sleep 120 & SP=$!
+su postgres -s /bin/sh -c "sed -i '1s/.*/$SP/' '$D/postmaster.pid'"
+php pg-harden.php check $H > /tmp/t15.out 2>&1
+cp /tmp/pid.bak "$D/postmaster.pid"
+expect "fremder Prozess gelesen" "$(grep -c PGH_T15_PASSWORD /tmp/t15.out)" 0
+expect "Serverprozess nicht nachgewiesen gemeldet" "$(grep -c 'Serverprozess nicht' /tmp/t15.out | sed 's/^[1-9][0-9]*$/ja/')" ja
+su postgres -s /bin/sh -c "rm '$D/postmaster.pid' && mkfifo -m 600 '$D/postmaster.pid'"
+timeout 60 php pg-harden.php check $H > /tmp/t15.out 2>&1; RC=$?
+rm -f "$D/postmaster.pid"; cp /tmp/pid.bak "$D/postmaster.pid"; chown postgres "$D/postmaster.pid"; chmod 600 "$D/postmaster.pid"; kill $SP
+expect "check mit FIFO endet (nicht 124)" "$([ $RC -eq 124 ] && echo hängt || echo endet)" endet
+expect "postmaster.pid als nicht lesbar gemeldet" "$(grep -c 'postmaster.pid nicht lesbar' /tmp/t15.out | sed 's/^[1-9][0-9]*$/ja/')" ja
+php pg-harden.php check $H > /tmp/t15.out 2>&1
+expect "danach wieder nachgewiesen" "$(grep -c 'Dienstkonto: postgres' /tmp/t15.out)" 1

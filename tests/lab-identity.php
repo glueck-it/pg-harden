@@ -95,6 +95,55 @@ $expect('root-eigene, für das Dienstkonto schreibgeschützte Datei', 'abgewiese
 });
 $expect('Identität nach den Dateifällen', 'root', fn() => posix_geteuid() === 0 && posix_getegid() === 0 ? 'root' : 'uid ' . posix_geteuid());
 
+// Reading (check, client): the same walk, but a directory others may write to hands the decision on instead of refusing
+mkdir("$base/sticky", 0777);
+chmod("$base/sticky", 01777);
+mkdir("$base/sticky/svc-dir", 0700);
+chown("$base/sticky/svc-dir", $svc['uid']);
+mkdir("$base/sticky/root-dir", 0755);
+file_put_contents("$base/sticky/root.conf", "x\n");
+$whoRead = static fn(?array $id): string => $id === null ? 'root' : ($id['uid'] === $svc['uid'] ? 'postgres' : $id['name']);
+$expect('Lesen: Datei in einem Verzeichnis nur für root', 'root', fn() => $whoRead(Fs::readerFor("$base/root-only/root.conf")));
+$expect('Lesen: Link des Dienstkontos nach /etc', 'postgres', fn() => $whoRead(Fs::readerFor("$base/svc/link/passwd")));
+$expect('Lesen: Verzeichnis für alle beschreibbar, ohne Sticky-Bit', 'nobody', fn() => $whoRead(Fs::readerFor("$base/open/x.conf")));
+$expect('Lesen: Sticky-Verzeichnis, Eintrag des Dienstkontos', 'postgres', fn() => $whoRead(Fs::readerFor("$base/sticky/svc-dir/x.conf")));
+$expect('Lesen: Sticky-Verzeichnis, Verzeichnis von root', 'root', fn() => $whoRead(Fs::readerFor("$base/sticky/root-dir/x.conf")));
+$expect('Lesen: Sticky-Verzeichnis, Datei von root (Name könnte fremd gewählt sein)', 'nobody', fn() => $whoRead(Fs::readerFor("$base/sticky/root.conf")));
+$expect('Lesen: Sticky-Verzeichnis, fehlender Eintrag', 'nobody', fn() => $whoRead(Fs::readerFor("$base/sticky/fehlt.conf")));
+link("$base/root-only/root.conf", "$base/sticky/hardlink.conf");
+$expect('Lesen: Sticky-Verzeichnis, zweiter Name einer Datei von root', 'nobody', fn() => $whoRead(Fs::readerFor("$base/sticky/hardlink.conf")));
+$expect('Lesen: relativer Pfad zählt ab dem Arbeitsverzeichnis', 'gelesen', function () use ($base): string {
+  chdir("$base/root-only");
+  return Fs::readGuarded('root.conf') === "x\n" ? 'gelesen' : 'nicht gelesen';
+});
+chdir('/');
+$expect('Schreiben: Sticky-Verzeichnis bleibt abgewiesen', 'abgewiesen', fn() => $whoRead(Fs::writerFor("$base/sticky/svc-dir/x.conf")));
+
+// The attack: a person's .pgpass (or postmaster.pid) as a link to a file only root may read
+file_put_contents("$base/root-only/secret", "geheim\n");
+chmod("$base/root-only/secret", 0600);
+symlink("$base/root-only/secret", "$base/svc/pgpass");
+lchown("$base/svc/pgpass", $svc['uid']);
+$expect('readGuarded durch den Link auf eine Datei von root', 'nicht gelesen', fn() => Fs::readGuarded("$base/svc/pgpass") === null ? 'nicht gelesen' : 'gelesen');
+$expect('readGuarded einer Datei des Dienstkontos', 'gelesen', function () use ($base, $svc): string {
+  file_put_contents("$base/svc/own.conf", "x\n");
+  chown("$base/svc/own.conf", $svc['uid']);
+  chmod("$base/svc/own.conf", 0600);
+  return Fs::readGuarded("$base/svc/own.conf") === "x\n" ? 'gelesen' : 'nicht gelesen';
+});
+
+// A FIFO or device in place of a file: refused at once instead of hanging in open() or reading without end
+posix_mkfifo("$base/svc/fifo", 0600);
+$expect('read() einer FIFO', 'abgewiesen ohne Warten', function () use ($base): string {
+  $t = microtime(true);
+  $got = Fs::read("$base/svc/fifo");
+  return $got === null && microtime(true) - $t < 2 ? 'abgewiesen ohne Warten' : 'gelesen oder gewartet';
+});
+$expect('read() eines Geräts', 'abgewiesen', fn() => Fs::read('/dev/zero') === null ? 'abgewiesen' : 'gelesen');
+$expect('read() über der Grenze', 'abgewiesen', fn() => Fs::read("$base/root-only/root.conf", 1) === null ? 'abgewiesen' : 'gelesen');
+$expect('read() aus /proc (Größe 0)', 'gelesen', fn() => str_contains((string) Fs::read('/proc/self/status', 65536), 'PPid:') ? 'gelesen' : 'nicht gelesen');
+$expect('Identität nach den Lesefällen', 'root', fn() => posix_geteuid() === 0 && posix_getegid() === 0 ? 'root' : 'uid ' . posix_geteuid());
+
 // Clean up (as root; the probe file only exists after a regression)
 $remove = static function (string $p) use (&$remove): void {
   if (is_dir($p) && !is_link($p)) {

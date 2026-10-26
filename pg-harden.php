@@ -857,8 +857,9 @@ final class ExtraCandidates
       throw new HardenException('--extra-candidates: ungültiger Dateiname (nur lokale Dateien).');
     }
     $max = self::MAX_ENTRIES * (self::MAX_LENGTH + 2) + 1024;
-    // One handle for the checks and the read: a file swapped in between is not what we inspected.
-    $fh = Fs::attempt(fn() => fopen($path, 'rb'));
+    // One handle for the checks and the read: a file swapped in between is not what we inspected. Without blocking ("n"): a FIFO
+    // would otherwise hang in open() before fstat can refuse it (see Fs::read).
+    $fh = Fs::attempt(fn() => fopen($path, 'rbn'));
     if (!is_resource($fh)) {
       throw new HardenException('--extra-candidates: Datei nicht lesbar.');
     }
@@ -888,6 +889,7 @@ final class ExtraCandidates
           throw new HardenException('--extra-candidates: die Datei muss dem ausführenden Benutzer gehören und darf für andere nicht zugänglich sein (chmod 600).');
         }
       }
+      Fs::attempt(fn() => stream_set_blocking($fh, true));
       $content = stream_get_contents($fh, $max + 1);
     } finally {
       fclose($fh);

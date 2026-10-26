@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **Security fix for `check` and `client` run as root.** Affected: 0.3.1 and earlier on Linux and other Unix systems; reproduced
+  against 0.3.1 in a test container. Both commands read files that another account controls, and they read them as root:
+  - `client --user=<account>`: the account could link its `.pgpass` (or a service file, certificate or script) to a file only root may
+    read — the report then showed findings from root's file as the account's own (places and kinds of finding; values are not printed).
+  - `check`: the service account could write any process number into `postmaster.pid`; the process probes then read the environment
+    (names of variables containing `PASSWORD`), the owner and the program file of that other process as root and reported them as the
+    server's. A FIFO in place of `postmaster.pid` made `check` hang without end.
+
+  The way it works now: such files are read with the identity of the account that controls the way to them (the same walk from `/` as
+  for writing). A directory of root that group or others can write — for example `/tmp` — is not refused for reading: with the sticky
+  bit an existing entry decides by its owner (a file or link of root there is read as `nobody`, since anybody may have placed a hard link
+  to it), otherwise the file is read as `nobody`. Every read opens without blocking and accepts only a regular file within a size limit. The process number counts only when
+  it is the parent of the tool's own database connection; on Linux both processes must also run as the owner of the data directory and
+  the start time must match the server's (`/proc`), on Windows the parent is checked in the process list. Otherwise the process probes
+  report "nicht geprüft". Windows has no identity switch: whether a junction on the way can redirect a read of `client --user` or a write
+  of `apply` there is examined next. Tests in `tests/lab-identity.php` (T14); checked against PostgreSQL 18 on Alpine and on Windows 11.
+
 ## 0.3.1 (2026-10-25)
 
 - **Security fix — update if you run `apply` or `rollback` as root.** Affected: 0.3.0 on Linux and other Unix systems, `apply --execute`
