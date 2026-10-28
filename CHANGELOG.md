@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **HTML report rebuilt (`check`, `verify`, `client` with `--format=html`):** the outline of the text report — header, summary,
+  comparison, findings by severity, errors, rules to review, incomplete, skipped and clean rules, mappings, result, notices — instead of
+  one table sorted by attention. On top a table of contents and an overview (tiles per severity and state, one bar over all rules);
+  a colour per severity and state, a print layout (light, no navigation, rules and table rows kept together, table headers repeated)
+  and dark mode on screen; the comparison of `verify` as tables (one row per rule with its places) instead of preformatted text;
+  mapping and comparison tables stack on narrow screens. Still one file without external resources and without scripts; the CSP now
+  admits the embedded stylesheet by its SHA-256 hash instead of `'unsafe-inline'` and adds `base-uri 'none'` and `form-action 'none'`.
+  Every value goes through `Text::printable` and `htmlspecialchars`; class names and anchors come from fixed keys only. Text and HTML
+  share the outline (`Report::summary`, `Verifier::grouped`), the text report is byte-identical. Test: `tests/html-report-test.php`
+  (offline, hostile values, allowlist of elements and attributes, CSP hash).
+- **`verify` and the previous report (a file of unknown origin):** an unexpected severity (for example an array) no longer aborts the
+  run with exit code 2 — `Verifier::compare` keeps only known severities, unknown ones stay empty; `meta.mode` must be a string like the
+  other header fields (`Verifier::isReport`), otherwise the report is refused with its message instead of a PHP warning. Dates are read
+  only in the form pg-harden writes (ATOM, optionally with fractions); before, the lenient parser turned values such as `now` or a date
+  followed by a NUL into a plausible date in the comparison heading, now they are shown as they are.
 - **Command line as in psql, in addition to the long names:** `-h HOST`, `-p PORT`, `-U USER`, `-d DBNAME` and `--username`. Long
   forms take the value after `=` or as the next argument (`--host=db1`, `--host db1`; also every other option with a value, such as
   `--out report.html`), short forms as the next argument or attached (`-h db1`, `-hdb1`); a value starting with `=` (`-h=db1`,

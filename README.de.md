@@ -81,6 +81,10 @@ php pg-harden.php check  --host=db1 --user=postgres --extra-candidates=extra-can
 php pg-harden.php rules
 ```
 
+**HTML-Bericht** (`--format=html` bei `check`, `verify` und `client`): eine einzige Datei ohne externe Ressourcen und ohne Skript — die
+Gliederung des Textberichts mit einer Übersicht oben, Farbe je Schwere, Druckvorlage und Dunkelmodus. Eine Content-Security-Policy lässt
+nur das eingebettete Stylesheet zu; jeder Wert vom Server oder aus einem früheren Bericht wird maskiert.
+
 **Genau sehen, was entsteht:** [examples/](examples/) enthält die echten Ausgaben aller Befehle gegen eine Beispielinstanz — Bericht (Text und
 HTML), Plan-Dateien, Probelauf, `apply` mit Journal, `verify`, `rollback`, `rules`, `client` und den Aussperrschutz, der eine Änderung an
 `pg_hba.conf` ablehnt.

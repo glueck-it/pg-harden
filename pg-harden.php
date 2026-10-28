@@ -1277,6 +1277,14 @@ final class Report
   public const SEVERITY_ORDER = ['high' => 0, 'medium' => 1, 'low' => 2, 'info' => 3];
   public const SEVERITY_LABEL = ['high' => 'hoch', 'medium' => 'mittel', 'low' => 'niedrig', 'info' => 'Info'];
   public const STATUS_LABEL = ['pass' => 'OK', 'fail' => 'BEFUND', 'info' => 'SICHTEN', 'skip' => 'ÜBERSPRUNGEN', 'error' => 'FEHLER'];
+  /** Sections after the findings, in report order; the text report prints the titles in capitals. */
+  public const GROUP_TITLE = [
+    'error' => 'Fehler bei der Prüfung',
+    'info' => 'Zu sichten',
+    'incomplete' => 'Ohne Befund, aber nicht vollständig geprüft',
+    'skip' => 'Übersprungen',
+    'pass' => 'Ohne Befund',
+  ];
 
   /** @return array{0: array, 1: bool} status counts and whether the intended-use notice belongs into the header */
   private static function summarize(Catalog $catalog, array $results): array
@@ -1415,22 +1423,40 @@ final class Report
     return $results;
   }
 
-  /** Findings first (most severe first), then errors, rules to review, incomplete, skipped, clean; within that the catalog order. */
-  public static function byAttention(array $results): array
+  /**
+   * The outline both report formats share: findings by severity, then the sections of GROUP_TITLE, each in catalog order,
+   * and the summary numbers of exactly these sections ("ohne Befund" counts only fully checked rules).
+   *
+   * @return array{kind: string, by_severity: array<string, list<array>>, groups: array<string, list<array>>, severities: list<string>, rest: string}
+   */
+  public static function summary(array $report): array
   {
-    $rank = fn(array $r) => match (true) {
-      $r['status'] === 'fail' => 0,
-      $r['status'] === 'error' => 1,
-      $r['status'] === 'info' => 2,
-      $r['status'] === 'pass' && $r['incomplete'] => 3,
-      $r['status'] === 'skip' => 4,
-      default => 5,
-    };
-    $sorted = self::sorted($results);
-    $pos = array_flip(array_column($sorted, 'id'));
-    usort($sorted, fn($a, $b) => [$rank($a), $a['status'] === 'fail' ? self::SEVERITY_ORDER[$a['severity']] : 0, $pos[$a['id']]]
-      <=> [$rank($b), $b['status'] === 'fail' ? self::SEVERITY_ORDER[$b['severity']] : 0, $pos[$b['id']]]);
-    return $sorted;
+    $bySeverity = array_fill_keys(array_keys(self::SEVERITY_ORDER), []);
+    $groups = array_fill_keys(array_keys(self::GROUP_TITLE), []);
+    foreach (self::sorted($report['results']) as $r) {
+      match (true) {
+        $r['status'] === 'fail' => $bySeverity[$r['severity']][] = $r,
+        $r['status'] === 'pass' && $r['incomplete'] => $groups['incomplete'][] = $r,
+        default => $groups[$r['status']][] = $r,
+      };
+    }
+    $severities = [];
+    foreach ($bySeverity as $sev => $list) {
+      if ($list !== []) {
+        $severities[] = count($list) . ' ' . self::SEVERITY_LABEL[$sev];
+      }
+    }
+    $c = $report['meta']['counts'];
+    $client = ($report['meta']['mode'] ?? 'server') === 'client';
+    $compared = isset($report['comparison']);
+    return [
+      'kind' => ($client ? 'Client-Prüfung' : 'Prüfbericht') . ($compared ? ' mit Vergleich' : ''),
+      'by_severity' => $bySeverity,
+      'groups' => $groups,
+      'severities' => $severities,
+      'rest' => count($groups['pass']) . ' ohne Befund · ' . count($groups['incomplete']) . ' ohne Befund, aber nicht vollständig geprüft · '
+        . "{$c['info']} zu sichten · {$c['skip']} übersprungen · {$c['error']} Fehler",
+    ];
   }
 
   public static function findingLine(array $f): string
@@ -1452,8 +1478,8 @@ final class TextRenderer
     $m = $report['meta'];
     $c = $m['counts'];
     $client = ($m['mode'] ?? 'server') === 'client';
-    $kind = $client ? (isset($report['comparison']) ? 'Client-Prüfung mit Vergleich' : 'Client-Prüfung') : (isset($report['comparison']) ? 'Prüfbericht mit Vergleich' : 'Prüfbericht');
-    $out = 'pg-harden ' . PG_HARDEN_VERSION . " · $kind · " . self::when($m['created_at'] ?? '') . "\n";
+    $s = Report::summary($report);
+    $out = 'pg-harden ' . PG_HARDEN_VERSION . " · {$s['kind']} · " . self::when($m['created_at'] ?? '') . "\n";
     if ($client) {
       $out .= self::field('Rechner', Text::printable($m['server']) . ' · Konto ' . Text::printable($m['user']));
     } else {
@@ -1471,24 +1497,7 @@ final class TextRenderer
     $out .= self::field('Katalog', Text::printable((string) $m['catalog']) . ' · '
       . (($m['legal_notice'] ?? null) !== null ? 'Hinweise zu Verwendung und Gewähr am Ende' : 'Hinweis zur Gewähr am Ende'));
 
-    $bySeverity = array_fill_keys(array_keys(Report::SEVERITY_ORDER), []);
-    $groups = ['error' => [], 'info' => [], 'incomplete' => [], 'skip' => [], 'pass' => []];
-    foreach (Report::sorted($report['results']) as $r) {
-      match (true) {
-        $r['status'] === 'fail' => $bySeverity[$r['severity']][] = $r,
-        $r['status'] === 'pass' && $r['incomplete'] => $groups['incomplete'][] = $r,
-        default => $groups[$r['status']][] = $r,
-      };
-    }
-    $severities = [];
-    foreach ($bySeverity as $sev => $list) {
-      if ($list !== []) {
-        $severities[] = count($list) . ' ' . Report::SEVERITY_LABEL[$sev];
-      }
-    }
-    // The same numbers as the sections below: "ohne Befund" counts only fully checked rules.
-    $rest = count($groups['pass']) . ' ohne Befund · ' . count($groups['incomplete']) . ' ohne Befund, aber nicht vollständig geprüft · '
-      . "{$c['info']} zu sichten · {$c['skip']} übersprungen · {$c['error']} Fehler";
+    ['by_severity' => $bySeverity, 'groups' => $groups, 'severities' => $severities, 'rest' => $rest] = $s;
     $out .= "\nZUSAMMENFASSUNG\n";
     $out .= '  ' . mb_str_pad(self::findings($c['fail']), 14) . ($severities === [] ? '' : implode(' · ', $severities)) . "\n";
     $out .= '  ' . self::wrap($rest, 2) . "\n";
@@ -1501,16 +1510,9 @@ final class TextRenderer
         $out .= "\nBEFUNDE — " . mb_strtoupper(Report::SEVERITY_LABEL[$sev]) . ' (' . count($list) . ")\n" . implode('', array_map(self::item(...), $list));
       }
     }
-    $titles = [
-      'error' => 'FEHLER BEI DER PRÜFUNG',
-      'info' => 'ZU SICHTEN',
-      'incomplete' => 'OHNE BEFUND, ABER NICHT VOLLSTÄNDIG GEPRÜFT',
-      'skip' => 'ÜBERSPRUNGEN',
-      'pass' => 'OHNE BEFUND',
-    ];
-    foreach ($titles as $key => $title) {
+    foreach (Report::GROUP_TITLE as $key => $title) {
       if ($groups[$key] !== []) {
-        $out .= "\n$title (" . count($groups[$key]) . ")\n" . implode('', array_map(self::item(...), $groups[$key]));
+        $out .= "\n" . mb_strtoupper($title) . ' (' . count($groups[$key]) . ")\n" . implode('', array_map(self::item(...), $groups[$key]));
       }
     }
 
@@ -1595,92 +1597,373 @@ final class TextRenderer
     return $head . str_repeat('─', max(3, self::WIDTH - mb_strlen($head))) . "\n";
   }
 
-  /** "2026-10-24T20:25:03+00:00" (also with fractions) → "24.10.2026 20:25 (+00:00)"; anything unparsable is shown as it is. */
+  /**
+   * "2026-10-24T20:25:03+00:00" (also with fractions) → "24.10.2026 20:25 (+00:00)". Only this exact form is read: a previous report
+   * is a file of unknown origin, and the lenient parser would turn "now" or a value with a NUL into a plausible date. Anything else
+   * is shown as it is.
+   */
   public static function when(string $atom): string
   {
-    try {
-      $d = new DateTimeImmutable($atom);
-    } catch (Exception) {
-      return Text::printable($atom);
+    // The pattern first: createFromFormat alone also takes two-digit years, zone names and "+99:99", and refuses a NUL with a
+    // ValueError instead of returning false.
+    if (preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-](?:0\d|1[0-4]):[0-5]\d$/D', $atom, $m) === 1) {
+      $d = DateTimeImmutable::createFromFormat(($m[1] ?? '') !== '' ? 'Y-m-d\TH:i:s.uP' : DATE_ATOM, $atom);
+      if ($d !== false && DateTimeImmutable::getLastErrors() === false) {
+        return $d->format('d.m.Y H:i') . ' (' . $d->format('P') . ')';
+      }
     }
-    return $atom === '' ? '' : $d->format('d.m.Y H:i') . ' (' . $d->format('P') . ')';
+    return Text::printable($atom);
   }
 }
 
+/**
+ * The report as one self-contained HTML file: the outline of the text report (header, summary, comparison, findings by
+ * severity, the other sections, mappings, result, notices) with an overview on top, a colour per severity, a print
+ * layout and dark mode. No external resource and no script; the CSP admits exactly the one stylesheet by its hash.
+ */
 final class HtmlRenderer
 {
+  /** Colour keys of the sections after the findings; class names come from fixed keys like these only, never from report data. */
+  private const GROUP_KEY = ['error' => 'error', 'info' => 'review', 'incomplete' => 'incomplete', 'skip' => 'skip', 'pass' => 'pass'];
+  private const COMPARISON_KEY = ['fixed' => 'pass', 'new' => 'high', 'open' => 'medium', 'not_comparable' => 'incomplete'];
+  private const MAPPING_KEY = [
+    'Befund' => 'high',
+    'nicht vollständig geprüft' => 'incomplete',
+    'Sichtung nötig' => 'review',
+    'ohne Befund' => 'pass',
+    'nicht anwendbar' => 'skip',
+  ];
+  /** Overview tiles after the severities: the words of the summary line. */
+  private const TILE_LABEL = [
+    'pass' => 'ohne Befund',
+    'incomplete' => 'ohne Befund, aber nicht vollständig geprüft',
+    'info' => 'zu sichten',
+    'skip' => 'übersprungen',
+    'error' => 'Fehler',
+  ];
+
+  /** Dark mode only on screen: a printout is always light. */
+  private const STYLE = <<<'CSS'
+    :root{color-scheme:light dark;
+      --bg:#fff;--fg:#1f2328;--muted:#57606a;--line:#d0d7de;--panel:#f6f8fa;
+      --high:#b42318;--high-bg:#fdeceb;--medium:#a24100;--medium-bg:#fff0e0;--low:#7a5800;--low-bg:#fcf3cf;
+      --info:#0b57d0;--info-bg:#e8f0fe;--review:var(--info);--review-bg:var(--info-bg);--error:#7b2d9b;--error-bg:#f4e9fa;
+      --incomplete:#0b6577;--incomplete-bg:#dff2f6;--skip:#57606a;--skip-bg:#eef1f4;--pass:#17703a;--pass-bg:#e5f4e9}
+    @media screen and (prefers-color-scheme:dark){:root{
+      --bg:#0f1216;--fg:#e6edf3;--muted:#9da7b3;--line:#30363d;--panel:#161b22;
+      --high:#ff8b80;--high-bg:#3d1714;--medium:#ffab5e;--medium-bg:#3a230d;--low:#e8c547;--low-bg:#30280b;
+      --info:#8ab4f8;--info-bg:#12233f;--error:#d2a8ff;--error-bg:#2b1a3d;
+      --incomplete:#5fd0e3;--incomplete-bg:#0d2c33;--skip:#9da7b3;--skip-bg:#21262d;--pass:#6dd58c;--pass-bg:#0f2e19}}
+    .k-high{--k:var(--high);--kb:var(--high-bg)}.k-medium{--k:var(--medium);--kb:var(--medium-bg)}
+    .k-low{--k:var(--low);--kb:var(--low-bg)}.k-info{--k:var(--info);--kb:var(--info-bg)}
+    .k-review{--k:var(--review);--kb:var(--review-bg)}.k-error{--k:var(--error);--kb:var(--error-bg)}
+    .k-incomplete{--k:var(--incomplete);--kb:var(--incomplete-bg)}.k-skip{--k:var(--skip);--kb:var(--skip-bg)}
+    .k-pass{--k:var(--pass);--kb:var(--pass-bg)}
+    *{box-sizing:border-box}
+    html{background:var(--bg)}
+    body{margin:0 auto;max-width:72rem;padding:24px 16px 48px;font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+      color:var(--fg);background:var(--bg)}
+    h1{font-size:1.6rem;line-height:1.25;margin:.2rem 0 1rem}
+    h1 .host{font-weight:400;overflow-wrap:anywhere}
+    h2,h3{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+    h2{font-size:1.15rem;margin:2rem 0 .6rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+    h3{font-size:1rem;margin:1.2rem 0 .4rem}
+    code,.id{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:.86em}
+    a{color:var(--info)}
+    a:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+    .tool,.note{color:var(--muted)}
+    .tool{margin:0;font-size:.9rem}
+    dl.meta{display:grid;grid-template-columns:max-content 1fr;gap:.25rem 1rem;margin:0 0 1rem}
+    dl.meta dt{color:var(--muted)}
+    dl.meta dd{margin:0;overflow-wrap:anywhere}
+    dl.meta dd.warn{color:var(--high);font-weight:600}
+    .confidential{margin:0;padding:.2rem .7rem;border-left:3px solid var(--line);color:var(--muted);font-size:.9rem}
+    .toc ol{list-style:none;margin:1rem 0 0;padding:0;display:flex;flex-wrap:wrap;gap:.4rem}
+    .toc a{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .65rem;border:1px solid var(--line);border-radius:999px;
+      background:var(--panel);color:var(--fg);font-size:.88rem;text-decoration:none}
+    .toc a:hover{border-color:var(--fg)}
+    .dot{flex:none;display:inline-block;width:.7rem;height:.7rem;border-radius:50%;background:var(--k,var(--muted))}
+    .count{display:inline-block;min-width:1.7em;padding:0 .4em;border:1px solid var(--line);border-radius:999px;background:var(--panel);
+      font-size:.8rem;font-weight:600;text-align:center}
+    .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr));gap:.5rem;margin:.6rem 0}
+    .tile{display:block;padding:.55rem .8rem;border:1px solid var(--line);border-top:4px solid var(--k);border-radius:8px;
+      background:var(--panel);color:var(--fg);text-decoration:none}
+    .tile .n{display:block;font-size:1.6rem;font-weight:700;line-height:1.15;color:var(--k)}
+    .tile .l{font-size:.85rem;color:var(--muted)}
+    .tile.zero{border-top-color:var(--line)}
+    .tile.zero .n{color:var(--muted)}
+    a.tile:hover{border-color:var(--k)}
+    @media (min-width:30rem){.tile-main{grid-column:span 2}}
+    .bar{display:block;width:100%;height:14px;margin:.8rem 0 .2rem;border-radius:7px;background:var(--line)}
+    .bar rect{fill:var(--k);stroke:var(--bg);stroke-width:2px}
+    .rules{list-style:none;margin:0;padding:0}
+    .rule{margin:.45rem 0;padding:.5rem .8rem;border:1px solid var(--line);border-left:4px solid var(--k,var(--line));border-radius:6px}
+    section.k-pass .rule,section.k-skip .rule{margin:.25rem 0;padding:.25rem .8rem}
+    .rule-head{margin:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:.15rem .7rem}
+    .rule-head .id{color:var(--muted);overflow-wrap:anywhere}
+    .rule-title{font-weight:600}
+    .rule .note{margin:.3rem 0 0;font-size:.9rem;overflow-wrap:anywhere}
+    .rule .note::before{content:"→ " / ""}
+    .findings{margin:.35rem 0 0;padding-left:1.2rem}
+    .findings li{overflow-wrap:anywhere}
+    .badge{display:inline-block;padding:.05rem .55rem;border-radius:999px;background:var(--kb);color:var(--k);
+      font-size:.8rem;font-weight:600;white-space:nowrap}
+    .chips{list-style:none;margin:.5rem 0;padding:0;display:flex;flex-wrap:wrap;gap:.4rem}
+    .alert{margin:.5rem 0;padding:.5rem .8rem;border:1px solid var(--high);border-radius:6px;background:var(--high-bg)}
+    .alert strong{color:var(--high)}
+    .table-wrap{overflow-x:auto}
+    table{width:100%;margin:.4rem 0;border-collapse:collapse;font-size:.9rem}
+    th,td{padding:.35rem .55rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+    th{color:var(--muted);font-weight:600}
+    td{overflow-wrap:break-word;hyphens:auto}
+    td code,td.id{hyphens:none}
+    td.num,td.key{white-space:nowrap}
+    .result{margin:2rem 0 0;padding:.7rem .9rem;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+    footer{margin-top:2rem;color:var(--muted);font-size:.9rem}
+    footer h2{color:var(--fg)}
+    @media (max-width:30rem){dl.meta{grid-template-columns:1fr;gap:0}dl.meta dd{margin-bottom:.4rem}}
+    @media screen and (max-width:40rem){
+      table.stack,table.stack tbody{display:block}
+      table.stack thead{display:none}
+      table.stack tr{display:block;padding:.45rem 0;border-bottom:1px solid var(--line)}
+      table.stack td{display:block;padding:.1rem 0;border:0;overflow-wrap:anywhere}
+      table.stack td.key,table.stack td.state{display:inline-block;margin-right:.5rem}
+      table.stack td[data-label]::before{content:attr(data-label) ": ";color:var(--muted)}
+    }
+    @media (forced-colors:active){.dot,.bar rect{forced-color-adjust:none}.badge,.count{border:1px solid}}
+    @page{margin:14mm 12mm}
+    @media print{
+      body{max-width:none;padding:0;font-size:9.5pt}
+      .toc{display:none}
+      a{color:inherit;text-decoration:none}
+      *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      h2,h3{break-after:avoid}
+      .rule,.tile,.alert,.result,tr{break-inside:avoid}
+      thead{display:table-header-group}
+      .table-wrap{overflow:visible}
+    }
+    CSS;
+
   public static function render(array $report): string
   {
-    $e = fn($s) => htmlspecialchars(Text::printable((string) $s), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     $m = $report['meta'];
     $c = $m['counts'];
-    $rows = '';
-    foreach (Report::byAttention($report['results']) as $r) {
-      $items = '';
-      foreach ($r['findings'] as $f) {
-        $items .= '<li>' . $e(Report::findingLine($f)) . '</li>';
-      }
-      $notes = '';
-      foreach ($r['notes'] as $n) {
-        $notes .= '<div class="note">' . $e($n) . '</div>';
-      }
-      $rows .= '<tr class="s-' . $e($r['status']) . '"><td>' . $e(Report::STATUS_LABEL[$r['status']])
-        . ($r['incomplete'] ? '<div class="note">unvollständig</div>' : '') . '</td><td>'
-        . $e(Report::SEVERITY_LABEL[$r['severity']]) . '</td><td>' . $e($r['category']) . '</td><td><strong>'
-        . $e($r['title']) . '</strong><div class="id">' . $e($r['id']) . '</div>' . $notes
-        . ($items !== '' ? "<ul>$items</ul>" : '') . '</td></tr>';
-    }
-    $maps = '';
-    foreach ($report['mappings'] as $map) {
-      if ($map['controls'] === []) {
-        continue;
-      }
-      $maps .= '<h2>Zuordnung ' . $e($map['framework']) . '</h2><p class="note">' . $e(MAPPING_DISCLAIMER)
-        . ($map['verified'] ? '' : ' ' . $e($map['note'])) . '</p>';
-      $maps .= '<table><thead><tr><th>Kennung</th><th>Thema</th><th>Ergebnis der zugeordneten Regeln</th><th>ohne Befund</th><th>Regeln</th></tr></thead><tbody>';
-      foreach ($map['controls'] as $ctl) {
-        $maps .= '<tr><td>' . $e($ctl['control']) . '</td><td>' . $e($ctl['title']) . '</td><td>' . $e($ctl['state'])
-          . '</td><td>' . $e($ctl['rules_clean']) . '</td><td class="id">' . $e(implode(', ', $ctl['rules'])) . '</td></tr>';
-      }
-      $maps .= '</tbody></table>';
-    }
-    $cmp = isset($report['comparison']) ? '<h2>Vergleich</h2><pre>' . $e(Verifier::renderText($report['comparison'])) . '</pre>' : '';
+    $s = Report::summary($report);
     $client = ($m['mode'] ?? 'server') === 'client';
-    $title = 'pg-harden — ' . ($client ? 'Client-Prüfung ' : '') . $m['server'];
-    $ssl = $m['ssl'] ? 'TLS' : 'ohne TLS';
-    $headline = $client
-      ? "Konto {$e($m['user'])} · {$e($m['created_at'])} · {$e($m['tool'])} · Katalog {$e($m['catalog'])}"
-      : "PostgreSQL {$e($m['server_version'])} · Benutzer {$e($m['user'])} · Verbindung {$ssl} · {$e($m['created_at'])} · {$e($m['tool'])} · Katalog {$e($m['catalog'])}";
-    $legal = ($m['legal_notice'] ?? null) !== null
-      ? '<p class="note"><strong>Bestimmungsgemäße Verwendung:</strong> ' . $e($m['legal_notice']) . '</p>' : '';
-    $noticeRef = $legal !== '' ? 'Hinweise zu Verwendung und Gewähr am Ende.' : 'Hinweis zur Gewähr am Ende.';
-    $passClean = count(array_filter($report['results'], fn($r) => $r['status'] === 'pass' && !$r['incomplete']));
-    $passIncomplete = count(array_filter($report['results'], fn($r) => $r['status'] === 'pass' && $r['incomplete']));
+    $legal = $m['legal_notice'] ?? null;
+
+    // Sections in the order of the text report; the table of contents follows them.
+    $toc = [['summary', 'Zusammenfassung', null, null]];
+    $body = '';
+    if (isset($report['comparison'])) {
+      $toc[] = ['comparison', 'Vergleich', null, null];
+      $body .= self::comparison($report['comparison']);
+    }
+    $sections = [];
+    foreach ($s['by_severity'] as $sev => $list) {
+      $sections[] = ["findings-$sev", 'Befunde — ' . Report::SEVERITY_LABEL[$sev], $sev, $list];
+    }
+    foreach ($s['groups'] as $group => $list) {
+      $sections[] = ["rules-$group", Report::GROUP_TITLE[$group], self::GROUP_KEY[$group], $list];
+    }
+    foreach ($sections as [$id, $title, $key, $list]) {
+      if ($list !== []) {
+        $toc[] = [$id, $title, count($list), $key];
+        $body .= self::section($id, $title, $key, $list);
+      }
+    }
+    $n = 0;
+    foreach ($report['mappings'] as $map) {
+      if ($map['controls'] !== []) {
+        $id = 'mapping-' . ++$n;
+        $toc[] = [$id, 'Zuordnung ' . $map['framework'], null, null];
+        $body .= self::mapping($id, $map);
+      }
+    }
+    $toc[] = ['notices', 'Hinweise', null, null];
+    $nav = '';
+    foreach ($toc as [$id, $label, $count, $key]) {
+      $nav .= "<li><a href=\"#$id\">" . ($key !== null ? "<span class=\"dot k-$key\" aria-hidden=\"true\"></span>" : '') . self::esc($label)
+        . ($count !== null ? " <span class=\"count\">$count</span>" : '') . '</a></li>';
+    }
+
+    // Header lines as in the text report.
+    if ($client) {
+      $fields = [['Rechner', $m['server'] . ' · Konto ' . $m['user'], false]];
+    } else {
+      $fields = [
+        ['Server', $m['server'] . ' · PostgreSQL ' . $m['server_version'] . ' · Benutzer ' . $m['user'] . ($m['superuser'] ? ' (Superuser)' : '')
+          . ' · ' . ($m['ssl'] ? 'TLS' : 'ohne TLS'), false],
+        ['Umfang', 'Datenbanken ' . implode(', ', $m['databases']) . ' · Betriebssystem-Regeln '
+          . ($m['local_server'] ? 'geprüft' : 'nicht geprüft (' . $m['local_note'] . ')'), false],
+      ];
+      foreach ($m['refused_databases'] as $db => $reason) {
+        $fields[] = ['Nicht geprüft', $db . ' — ' . $reason, false];
+      }
+      if ($m['remote'] && !$m['certificate_verified']) {
+        $fields[] = ['Achtung', 'Serverzertifikat nicht geprüft — für entfernte Hosts --sslmode=verify-full verwenden', true];
+      }
+    }
+    $meta = '';
+    foreach ($fields as [$label, $value, $warn]) {
+      $meta .= '<dt>' . self::esc($label) . '</dt><dd' . ($warn ? ' class="warn"' : '') . '>' . self::esc($value) . '</dd>';
+    }
+    $meta .= '<dt>Katalog</dt><dd>' . self::esc($m['catalog']) . ' · <a href="#notices">'
+      . ($legal !== null ? 'Hinweise zu Verwendung und Gewähr' : 'Hinweis zur Gewähr') . '</a> am Ende</dd>';
+
+    // Overview: findings in total and by severity, then the other sections, then all rules as one bar.
+    $firstFinding = array_key_first(array_filter($s['by_severity']));
+    $tiles = self::tile($c['fail'] > 0 ? 'high' : 'pass', $c['fail'], $c['fail'] === 1 ? 'Befund' : 'Befunde', "findings-$firstFinding", true);
+    $segments = [];
+    foreach ($s['by_severity'] as $sev => $list) {
+      if ($sev !== 'info' || $list !== []) {
+        $tiles .= self::tile($sev, count($list), Report::SEVERITY_LABEL[$sev], "findings-$sev");
+      }
+      $segments[] = [$sev, count($list)];
+    }
+    foreach (self::TILE_LABEL as $group => $label) {
+      $tiles .= self::tile(self::GROUP_KEY[$group], count($s['groups'][$group]), $label, "rules-$group");
+    }
+    foreach (self::GROUP_KEY as $group => $key) {
+      $segments[] = [$key, count($s['groups'][$group])];
+    }
+    $result = TextRenderer::findings($c['fail']) . ($s['severities'] === [] ? '' : ' (' . implode(' · ', $s['severities']) . ')') . ' · ' . $s['rest'];
+    $total = count($report['results']);
+    $summary = '<section id="summary"><h2>Zusammenfassung</h2><div class="tiles">' . $tiles . '</div>'
+      . self::bar($segments, $total, "Anteile aller $total Regeln: $result") . '</section>';
+
+    $notices = '<footer id="notices"><h2>Hinweise</h2>'
+      . ($legal !== null ? '<p><strong>Bestimmungsgemäße Verwendung:</strong> ' . self::esc($legal) . '</p>' : '')
+      . '<p>' . self::esc(RESPONSIBILITY_NOTICE) . '</p></footer>';
+    $style = self::STYLE;
+    $hash = base64_encode(hash('sha256', $style, true));
+    $title = self::esc('pg-harden — ' . $s['kind'] . ' ' . $m['server']);
+    $tool = self::esc('pg-harden ' . PG_HARDEN_VERSION . ' · ' . $s['kind'] . ' · ' . TextRenderer::when((string) ($m['created_at'] ?? '')));
+    $kind = self::esc($s['kind']);
+    $server = self::esc($m['server']);
+    $resultHtml = self::esc($result);
     return <<<HTML
       <!doctype html>
       <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-      <title>{$e($title)}</title>
-      <style>
-        body{font-family:system-ui,sans-serif;margin:24px;color:#1f2937;background:#fff}
-        table{border-collapse:collapse;width:100%;margin:12px 0}
-        th,td{border-bottom:1px solid #e5e7eb;padding:6px 8px;text-align:left;vertical-align:top;font-size:14px}
-        .id{color:#6b7280;font-family:monospace;font-size:12px}.note{color:#6b7280;font-size:13px}
-        tr.s-fail td:first-child{color:#b91c1c;font-weight:600}tr.s-pass td:first-child{color:#15803d}
-        tr.s-error td:first-child{color:#b45309;font-weight:600}ul{margin:4px 0 0 18px;padding:0}pre{white-space:pre-wrap}
-      </style></head><body>
-      <h1>{$e($title)}</h1>
-      <p>{$headline}</p>
-      <p><strong>{$e(TextRenderer::findings($c['fail']))}</strong> · {$passClean} ohne Befund · {$passIncomplete} ohne Befund, aber nicht vollständig geprüft · {$c['info']} zu sichten · {$c['skip']} übersprungen · {$c['error']} Fehler</p>
-      <p class="note">Der Bericht enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen. {$noticeRef}</p>
-      {$cmp}
-      <table><thead><tr><th>Status</th><th>Stufe</th><th>Bereich</th><th>Regel</th></tr></thead><tbody>{$rows}</tbody></table>
-      {$maps}
-      <h2>Hinweise</h2>
-      {$legal}
-      <p class="note">{$e(RESPONSIBILITY_NOTICE)}</p>
+      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-{$hash}'; base-uri 'none'; form-action 'none'">
+      <meta name="color-scheme" content="light dark">
+      <title>{$title}</title>
+      <style>{$style}</style>
+      </head><body>
+      <header>
+      <p class="tool">{$tool}</p>
+      <h1>{$kind} <span class="host">{$server}</span></h1>
+      <dl class="meta">{$meta}</dl>
+      <p class="confidential">Der Bericht enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen.</p>
+      <nav class="toc" aria-label="Inhalt"><ol>{$nav}</ol></nav>
+      </header>
+      <main>
+      {$summary}
+      {$body}
+      <p class="result"><strong>Ergebnis:</strong> {$resultHtml}</p>
+      </main>
+      {$notices}
       </body></html>
+
       HTML;
+  }
+
+  /** Every value of the report goes through here: printable (control and format characters made visible), then HTML-escaped. */
+  private static function esc(mixed $s): string
+  {
+    return htmlspecialchars(Text::printable((string) $s), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+  }
+
+  private static function tile(string $key, int $n, string $label, string $target, bool $main = false): string
+  {
+    $class = "tile k-$key" . ($main ? ' tile-main' : ($n === 0 ? ' zero' : ''));
+    $inner = "<span class=\"n\">$n</span> <span class=\"l\">" . self::esc($label) . '</span>';
+    return $n > 0 ? "<a class=\"$class\" href=\"#$target\">$inner</a>" : "<div class=\"$class\">$inner</div>";
+  }
+
+  /** All rules as one stacked bar: geometry as SVG attributes, colour from the stylesheet (the CSP admits no style attribute). */
+  private static function bar(array $segments, int $total, string $label): string
+  {
+    if ($total === 0) {
+      return '';
+    }
+    $x = 0.0;
+    $rects = '';
+    foreach ($segments as [$key, $n]) {
+      if ($n > 0) {
+        $w = 100 * $n / $total;
+        $rects .= sprintf('<rect class="k-%s" x="%.3F%%" y="0" width="%.3F%%" height="100%%"/>', $key, $x, $w);
+        $x += $w;
+      }
+    }
+    return '<svg class="bar" role="img" aria-label="' . self::esc($label) . "\" width=\"100%\" height=\"14\">$rects</svg>";
+  }
+
+  private static function section(string $id, string $title, string $key, array $list): string
+  {
+    return "<section id=\"$id\" class=\"k-$key\"><h2><span class=\"dot\" aria-hidden=\"true\"></span>" . self::esc($title)
+      . ' <span class="count">' . count($list) . '</span></h2><ul class="rules">' . implode('', array_map(self::item(...), $list)) . '</ul></section>';
+  }
+
+  /** One rule: id, title, then notes (→) and findings, as in the text report. */
+  private static function item(array $r): string
+  {
+    $out = '<li class="rule"><p class="rule-head"><code class="id">' . self::esc($r['id']) . '</code> <span class="rule-title">'
+      . self::esc($r['title']) . '</span>'
+      . ($r['incomplete'] && $r['status'] === 'fail' ? ' <span class="badge k-incomplete">nicht vollständig geprüft</span>' : '') . '</p>';
+    foreach ($r['notes'] as $note) {
+      $out .= '<p class="note">' . self::esc($note) . '</p>';
+    }
+    $findings = '';
+    foreach ($r['findings'] as $f) {
+      $findings .= '<li>' . self::esc(Report::findingLine($f)) . '</li>';
+    }
+    return $out . ($findings !== '' ? "<ul class=\"findings\">$findings</ul>" : '') . '</li>';
+  }
+
+  /** The comparison of verify: warnings, the four counts, then one table per non-empty list (one row per rule). */
+  private static function comparison(array $diff): string
+  {
+    $out = '<section id="comparison"><h2>Vergleich mit dem Bericht vom ' . self::esc(TextRenderer::when((string) $diff['previous_created_at'])) . '</h2>';
+    foreach ($diff['warnings'] as $w) {
+      $out .= '<p class="alert"><strong>Achtung:</strong> ' . self::esc($w) . '</p>';
+    }
+    $chips = '';
+    foreach (Verifier::LABELS as $k => $label) {
+      $chips .= '<li class="badge k-' . self::COMPARISON_KEY[$k] . '">' . self::esc($label) . ' ' . count($diff[$k]) . '</li>';
+    }
+    $out .= "<ul class=\"chips\">$chips</ul>";
+    foreach (Verifier::grouped($diff) as $k => $byRule) {
+      $rows = '';
+      foreach ($byRule as $rule => $g) {
+        // Only a known severity becomes a class name (Verifier::compare already drops unknown ones from the previous report).
+        $sev = isset(Report::SEVERITY_LABEL[$g['severity']])
+          ? '<span class="badge k-' . $g['severity'] . '">' . Report::SEVERITY_LABEL[$g['severity']] . '</span>' : '';
+        $rows .= "<tr><td class=\"state\">$sev</td><td data-label=\"Regel\"><code class=\"id\">" . self::esc($rule) . '</code><div>' . self::esc($g['title'])
+          . '</div></td><td data-label="Fundstellen">' . self::esc(implode(', ', $g['where'])) . '</td></tr>';
+      }
+      $out .= '<h3 class="k-' . self::COMPARISON_KEY[$k] . '"><span class="dot" aria-hidden="true"></span>' . self::esc(Verifier::LABELS[$k])
+        . ' <span class="count">' . count($diff[$k]) . '</span></h3><div class="table-wrap"><table class="stack"><thead><tr><th scope="col">Stufe</th>'
+        . "<th scope=\"col\">Regel</th><th scope=\"col\">Fundstellen</th></tr></thead><tbody>$rows</tbody></table></div>";
+    }
+    return $out . '</section>';
+  }
+
+  private static function mapping(string $id, array $map): string
+  {
+    $rows = '';
+    foreach ($map['controls'] as $ctl) {
+      $rows .= '<tr><td class="key"><code>' . self::esc($ctl['control']) . '</code></td><td class="state"><span class="badge k-'
+        . (self::MAPPING_KEY[$ctl['state']] ?? 'skip') . '">' . self::esc($ctl['state']) . '</span></td><td class="num" data-label="ohne Befund">'
+        . self::esc($ctl['rules_clean']) . '</td><td data-label="Thema">' . self::esc($ctl['title']) . '</td><td class="id" data-label="Regeln">'
+        . self::esc(implode(', ', $ctl['rules'])) . '</td></tr>';
+    }
+    return "<section id=\"$id\"><h2>Zuordnung " . self::esc($map['framework'])
+      . ($map['verified'] ? '' : ' <span class="badge k-incomplete">Kennungen ungeprüft</span>') . '</h2>'
+      . '<p class="note">' . self::esc(MAPPING_DISCLAIMER) . ($map['verified'] ? '' : ' ' . self::esc($map['note'])) . '</p>'
+      . '<div class="table-wrap"><table class="stack"><thead><tr><th scope="col">Kennung</th><th scope="col">Ergebnis der Regeln</th>'
+      . '<th scope="col">ohne Befund</th><th scope="col">Thema</th><th scope="col">Regeln</th></tr></thead>'
+      . "<tbody>$rows</tbody></table></div></section>";
   }
 }
 
@@ -1938,7 +2221,7 @@ final class Verifier
   {
     if (!is_array($r) || !is_array($r['meta'] ?? null) || !is_array($r['results'] ?? null) || !array_is_list($r['results'])
       || preg_match('/^pg-harden (?:0\.(?:[2-9]|\d{2,})\.|[1-9]\d*\.)/', (string) ($r['meta']['tool'] ?? '')) !== 1
-      || array_filter(['server', 'server_version', 'user', 'created_at'], fn($k) => isset($r['meta'][$k]) && !is_string($r['meta'][$k])) !== []) {
+      || array_filter(['mode', 'server', 'server_version', 'user', 'created_at'], fn($k) => isset($r['meta'][$k]) && !is_string($r['meta'][$k])) !== []) {
       return false;
     }
     foreach ($r['results'] as $res) {
@@ -1969,8 +2252,10 @@ final class Verifier
         if ($r['status'] !== 'fail') {
           continue;
         }
+        // The previous report is a file of unknown origin: a severity outside the known ones stays empty.
+        $severity = is_string($r['severity'] ?? null) && isset(Report::SEVERITY_ORDER[$r['severity']]) ? $r['severity'] : null;
         foreach ($r['findings'] as $f) {
-          $set[$key($r, $f)] = ['rule' => $r['id'], 'title' => $r['title'], 'severity' => $r['severity'] ?? null, 'object' => $f['object'], 'database' => $f['database'] ?? null];
+          $set[$key($r, $f)] = ['rule' => $r['id'], 'title' => $r['title'], 'severity' => $severity, 'object' => $f['object'], 'database' => $f['database'] ?? null];
         }
       }
       return $set;
@@ -2018,35 +2303,44 @@ final class Verifier
     ];
   }
 
+  public const LABELS = [
+    'fixed' => 'Behoben',
+    'new' => 'Neu',
+    'open' => 'Weiter offen',
+    'not_comparable' => 'Nicht vergleichbar (diesmal nicht erneut geprüft)',
+  ];
+
+  /**
+   * The non-empty lists of a comparison, one entry per rule with its places side by side (hba.trust: Zeile 117, Zeile 119, …);
+   * most severe first, then by rule: the same order as the findings in the report. Places are printable, titles raw.
+   *
+   * @return array<string, array<string, array{severity: string, title: string, where: list<string>}>>
+   */
+  public static function grouped(array $diff): array
+  {
+    $out = [];
+    foreach (array_keys(self::LABELS) as $k) {
+      $items = $diff[$k];
+      usort($items, fn($a, $b) => [Report::SEVERITY_ORDER[$a['severity'] ?? 'info'] ?? 3, $a['rule']]
+        <=> [Report::SEVERITY_ORDER[$b['severity'] ?? 'info'] ?? 3, $b['rule']]);
+      foreach ($items as $x) {
+        $out[$k][$x['rule']]['severity'] ??= $x['severity'] ?? '';
+        $out[$k][$x['rule']]['title'] ??= $x['title'] ?? '';
+        $out[$k][$x['rule']]['where'][] = ($x['database'] !== null ? '[' . Text::printable($x['database']) . '] ' : '') . Text::printable($x['object']);
+      }
+    }
+    return $out;
+  }
+
   public static function renderText(array $diff): string
   {
-    $labels = [
-      'fixed' => 'Behoben',
-      'new' => 'Neu',
-      'open' => 'Weiter offen',
-      'not_comparable' => 'Nicht vergleichbar (diesmal nicht erneut geprüft)',
-    ];
     $out = "\nVERGLEICH MIT DEM BERICHT VOM " . TextRenderer::when((string) $diff['previous_created_at']) . "\n";
     foreach ($diff['warnings'] as $w) {
       $out .= '  ACHTUNG: ' . TextRenderer::wrap(Text::printable($w), 11) . "\n";
     }
-    $out .= '  ' . implode(' · ', array_map(fn($k) => $labels[$k] . ' ' . count($diff[$k]), array_keys($labels))) . "\n";
-    foreach ($labels as $k => $label) {
-      if ($diff[$k] === []) {
-        continue;
-      }
-      $items = $diff[$k];
-      // Most severe first, then by rule: the same order as the findings in the report.
-      usort($items, fn($a, $b) => [Report::SEVERITY_ORDER[$a['severity'] ?? 'info'] ?? 3, $a['rule']]
-        <=> [Report::SEVERITY_ORDER[$b['severity'] ?? 'info'] ?? 3, $b['rule']]);
-      $out .= "\n  $label (" . count($items) . ")\n";
-      // One line per rule, its places side by side (hba.trust: Zeile 117, Zeile 119, …).
-      $byRule = [];
-      foreach ($items as $x) {
-        $byRule[$x['rule']]['severity'] ??= $x['severity'] ?? '';
-        $byRule[$x['rule']]['title'] ??= $x['title'] ?? '';
-        $byRule[$x['rule']]['where'][] = ($x['database'] !== null ? '[' . Text::printable($x['database']) . '] ' : '') . Text::printable($x['object']);
-      }
+    $out .= '  ' . implode(' · ', array_map(fn($k) => self::LABELS[$k] . ' ' . count($diff[$k]), array_keys(self::LABELS))) . "\n";
+    foreach (self::grouped($diff) as $k => $byRule) {
+      $out .= "\n  " . self::LABELS[$k] . ' (' . count($diff[$k]) . ")\n";
       foreach ($byRule as $rule => $g) {
         $out .= '    ' . mb_str_pad(Report::SEVERITY_LABEL[$g['severity']] ?? '', 8) . mb_str_pad(Text::printable((string) $rule), 29) . ' '
           . TextRenderer::wrap(Text::printable($g['title']), 42) . "\n"

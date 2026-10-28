@@ -89,6 +89,10 @@ php pg-harden.php check  --host=db1 --user=postgres --extra-candidates=company-t
 php pg-harden.php rules
 ```
 
+**HTML report** (`--format=html` for `check`, `verify` and `client`): one file without external resources or scripts — the outline of the
+text report with an overview on top, a colour per severity, a print layout and dark mode. A Content Security Policy admits only the
+embedded stylesheet; every value from the server or a previous report is escaped.
+
 **See exactly what it produces:** [examples/](examples/) contains the real output of every command against a sample instance — report
 (text and HTML), plan files, dry run, `apply` with its journal, `verify`, `rollback`, `rules`, `client`, and the lockout protection refusing a
 `pg_hba.conf` change.

@@ -40,6 +40,7 @@ docker cp "$NAME:/root/journal/apply-log.json" "$OUTD/04-apply-log.json"
 run "ls -la /root/journal /root/journal/backup" > "$OUT/04-journal-files.txt"
 run "cat \$(psql -U postgres -Atc 'show data_directory')/conf.d/90-pg-harden.conf" > "$OUT/04-written-90-pg-harden.conf"
 run "php pg-harden.php verify $H --previous=/root/plan/report.json" > "$OUT/05-verify.txt"
+run "php pg-harden.php verify $H --previous=/root/plan/report.json --format=html" > "$OUT/05-verify.html"
 run "php pg-harden.php rollback $H --dir=/root/journal" > "$OUT/06-rollback.txt"
 # Lockout protection: pg_hba.conf trust -> scram-sha-256 is refused while login roles have no SCRAM password
 run "sha256sum \$(psql -U postgres -Atc 'show hba_file')" > "$OUT/07-pg_hba-checksum-before.txt"
@@ -47,4 +48,5 @@ run "php pg-harden.php apply $H --rules=hba.trust --include-confirm=hba.trust --
 run "sha256sum \$(psql -U postgres -Atc 'show hba_file')" > "$OUT/07-pg_hba-checksum-after.txt"
 run "php pg-harden.php rules" > "$OUT/08-rules.txt"
 run "php pg-harden.php client" > "$OUT/09-client.txt"
+run "php pg-harden.php client --format=html" > "$OUT/09-client.html"
 echo "Ausgaben in $OUT"
