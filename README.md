@@ -93,8 +93,11 @@ php pg-harden.php rules
 (text and HTML), plan files, dry run, `apply` with its journal, `verify`, `rollback`, `rules`, `client`, and the lockout protection refusing a
 `pg_hba.conf` change.
 
-Connection: `--host`, `--port`, `--dbname` (entry database, default `postgres`), `--sslmode`, `--databases=a,b`. Without `--host`/`--port` the
-libpq defaults apply (`PGHOST`, `PGPORT`, socket). For remote hosts `sslmode=require` is the default; `verify-full` is preferable.
+Connection: `--host`, `--port`, `--user`, `--dbname` (entry database, default `postgres`), `--sslmode`, `--databases=a,b`. As in psql,
+`-h`, `-p`, `-U`, `-d` and `--username` work as well — long forms `--host=db1` or `--host db1`, short forms `-h db1` or `-hdb1` (no `=`):
+`php pg-harden.php check -h db1 -U postgres`. `-U` and `--username` always mean the database user; for `client`, `--user` names an account
+of the machine. Help: `--help` or `-?` (`-h` is the host, as in psql). Without `--host`/`--port` the libpq defaults apply (`PGHOST`,
+`PGPORT`, socket). For remote hosts `sslmode=require` is the default; `verify-full` is preferable.
 Behind PgBouncer in transaction pooling session settings are not reliable — connect directly.
 
 Exit codes: `0` no findings · `1` findings · `3` no findings, but not everything was checked (missing rights, errors, skipped or locked
@@ -293,7 +296,8 @@ Operating-system rules, `apply` and `rollback` need access to the server's files
 in and run as root there. Practise against `lab/` only — never against production systems.
 
 `tests/` contains `allowlist-test.php` (unit test of the allowlist that `apply` and `rollback` pass SQL through: `php tests/allowlist-test.php`),
-`catalog-test.php` (offline test of the rule catalog, framework mappings and `Verifier`), `windows-redirect.php` and `windows-admin-test.ps1`
+`catalog-test.php` (offline test of the rule catalog, framework mappings and `Verifier`), `options-test.php` (offline test of the command
+line, long names and psql-style short options), `windows-redirect.php` and `windows-admin-test.ps1`
 (Windows path verification, handle ACLs and directory pinning `WindowsPin` against junctions; the second one runs with a temporary local account
 without administrator rights in an elevated PowerShell),
 `lab-matrix.sh` (regression run of `apply`/`rollback` in a container, calls `lab-identity.php` for the identity rules when writing and reading as root),

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Command line as in psql, in addition to the long names:** `-h HOST`, `-p PORT`, `-U USER`, `-d DBNAME` and `--username`. Long
+  forms take the value after `=` or as the next argument (`--host=db1`, `--host db1`; also every other option with a value, such as
+  `--out report.html`), short forms as the next argument or attached (`-h db1`, `-hdb1`); a value starting with `=` (`-h=db1`,
+  `--host==db1`) is refused. `-h` is the host as in psql; help is `--help` or `-?` and wins wherever it stands. A value given as the next argument never starts with `-`, so a
+  forgotten value fails instead of swallowing the next option; options without a command are refused (exit code 2) instead of printing
+  the help with exit code 0. `-U` and `--username` always mean the database user and are refused for `client`, where `--user` names an
+  account of the machine. An option given twice (also as long and short form) is refused. Test: `tests/options-test.php` (offline,
+  34 cases).
 - **Windows, `apply`, `rollback`, `check` and `client --user=<account>`: the write side holds the server's directories against a swap for a junction, handle-based ACL
   reading, and redirect checks below the profile and the server's data directory.** Windows has no identity switch (`Fs::asOwnerOf` /
   `Fs::asReaderOf` cannot drop administrator privileges to the service or user account), so a non-administrator who owns or may write the

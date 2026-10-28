@@ -85,7 +85,10 @@ php pg-harden.php rules
 HTML), Plan-Dateien, Probelauf, `apply` mit Journal, `verify`, `rollback`, `rules`, `client` und den Aussperrschutz, der eine Änderung an
 `pg_hba.conf` ablehnt.
 
-Verbindung: `--host`, `--port`, `--dbname` (Einstieg, Standard `postgres`), `--sslmode`, `--databases=a,b`.
+Verbindung: `--host`, `--port`, `--user`, `--dbname` (Einstieg, Standard `postgres`), `--sslmode`, `--databases=a,b`.
+Wie bei psql gehen auch `-h`, `-p`, `-U`, `-d` und `--username` — lang `--host=db1` oder `--host db1`, kurz `-h db1`
+oder `-hdb1` (ohne `=`): `php pg-harden.php check -h db1 -U postgres`. `-U` und `--username` sind immer der
+Datenbankbenutzer; bei `client` nennt `--user` ein Konto des Rechners. Hilfe: `--help` oder `-?` (`-h` ist wie bei psql der Host).
 Ohne `--host`/`--port` gelten die libpq-Vorgaben (`PGHOST`, `PGPORT`, Socket). Für entfernte Hosts ist
 `sslmode=require` voreingestellt; `verify-full` ist vorzuziehen.
 
@@ -316,7 +319,8 @@ das Verzeichnis hineinkopieren und als root im Container ausführen. Übungen nu
 ## Tests
 
 `tests/` enthält: `allowlist-test.php` (Unit-Test der Allowlist, die `apply` und `rollback` passieren müssen; `php tests/allowlist-test.php`),
-`catalog-test.php` (Offline-Test für Regelkatalog, Norm-Zuordnungen und `Verifier`), `windows-redirect.php` und `windows-admin-test.ps1`
+`catalog-test.php` (Offline-Test für Regelkatalog, Norm-Zuordnungen und `Verifier`), `options-test.php` (Offline-Test der
+Kommandozeile, lange Namen und Kurzformen wie bei psql), `windows-redirect.php` und `windows-admin-test.ps1`
 (Windows-Wegprüfung, Handle-ACLs und Verzeichnissperre `WindowsPin` gegen Junctions; der zweite läuft mit einem temporären lokalen Konto
 ohne Administratorrechte in einer Administrator-PowerShell),
 `lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container, ruft `lab-identity.php` für die Identitätsregeln beim Schreiben und Lesen als

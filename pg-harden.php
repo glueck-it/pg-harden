@@ -25,6 +25,9 @@ declare(strict_types=1);
  *
  * connection: --host --port --user --dbname (entry database, default postgres) --sslmode
  *             --databases=a,b (restrict database-scoped rules)
+ *             psql-style as well: -h HOST -p PORT -U USER -d DBNAME, --username; long forms --host=db1 or --host db1,
+ *             short forms -h db1 or -hdb1 (no "="). -U/--username always mean the database user (client: --user=ACCOUNT).
+ *             Help: --help or -?
  *             Unset host/port fall back to libpq (PGHOST, PGPORT, socket). Remote hosts default
  *             to sslmode=require.
  * password:   never on the command line; libpq reads PGPASSWORD or the pgpass file.
@@ -252,37 +255,84 @@ final class Options
 {
   private const VALUED = ['host', 'port', 'user', 'dbname', 'sslmode', 'databases', 'format', 'out', 'dir', 'previous', 'scan', 'rules', 'include-confirm', 'extra-candidates'];
   private const FLAGS = ['help', 'execute', 'yes'];
+  /** Short options as psql spells them, in addition to the long names. -h is the host as in psql; help is --help or -?. */
+  private const SHORT = ['h' => 'host', 'p' => 'port', 'U' => 'user', 'd' => 'dbname', '?' => 'help'];
+  /** psql's long name for the database user; pg-harden calls it --user. */
+  private const ALIAS = ['username' => 'user'];
 
   public string $command = '';
   private array $values = [];
 
+  /**
+   * --name=value, --name value, and the psql short forms -h db1 / -hdb1 (-p, -U, -d, -?). A value given as the next argument
+   * never starts with "-": a forgotten value then fails instead of swallowing the next option.
+   */
   public static function parse(array $argv): self
   {
     $o = new self();
-    foreach (array_slice($argv, 1) as $arg) {
+    $args = array_values(array_slice($argv, 1));
+    // As in psql the help wins wherever it stands: a broken option next to it must not hide it.
+    if (in_array('--help', $args, true) || in_array('-?', $args, true)) {
+      $o->values['help'] = true;
+      return $o;
+    }
+    /** @var array<string, string> option => how it was written */
+    $spelled = [];
+    for ($i = 0; $i < count($args); $i++) {
+      $arg = $args[$i];
       if (str_starts_with($arg, '--')) {
         $pair = explode('=', substr($arg, 2), 2);
-        if (!in_array($pair[0], self::VALUED, true) && !in_array($pair[0], self::FLAGS, true) && $pair[0] !== 'password') {
-          throw new HardenException('Unbekannte Option --' . Text::printable($pair[0]) . ' (siehe --help).');
-        }
-        if (in_array($pair[0], self::FLAGS, true) && isset($pair[1])) {
-          throw new HardenException("--{$pair[0]} ist ein Schalter und nimmt keinen Wert.");
-        }
-        if (in_array($pair[0], self::VALUED, true) && (!isset($pair[1]) || $pair[1] === '')) {
-          throw new HardenException("--{$pair[0]} braucht einen Wert (--{$pair[0]}=…).");
-        }
-        if (array_key_exists($pair[0], $o->values)) {
-          throw new HardenException("--{$pair[0]} ist mehrfach angegeben.");
-        }
-        $o->values[$pair[0]] = $pair[1] ?? true;
+        $written = '--' . $pair[0];
+        $name = self::ALIAS[$pair[0]] ?? $pair[0];
+        $value = $pair[1] ?? null;
+      } elseif (strlen($arg) >= 2 && $arg[0] === '-') {
+        $written = substr($arg, 0, 2);
+        $name = self::SHORT[$arg[1]] ?? throw new HardenException('Unbekannte Option ' . Text::printable($written) . ' (siehe --help).');
+        $value = strlen($arg) > 2 ? substr($arg, 2) : null;
       } elseif ($o->command === '') {
         $o->command = $arg;
+        continue;
       } else {
         throw new HardenException('Unbekanntes Argument: ' . Text::printable($arg));
       }
+      if ($name === 'password') {
+        throw new HardenException('Passwörter gehören nicht auf die Kommandozeile (Prozessliste, Shell-Historie). PGPASSWORD oder pgpass-Datei verwenden.');
+      }
+      $valued = in_array($name, self::VALUED, true);
+      if (!$valued && !in_array($name, self::FLAGS, true)) {
+        throw new HardenException('Unbekannte Option ' . Text::printable($written) . ' (siehe --help).');
+      }
+      if (!$valued && $value !== null) {
+        throw new HardenException(Text::printable($written) . ' ist ein Schalter und nimmt keinen Wert.');
+      }
+      if ($valued && $value === null) {
+        $next = $args[$i + 1] ?? null;
+        if ($next === null || $next === '' || str_starts_with($next, '-')) {
+          throw new HardenException(Text::printable($written) . " braucht einen Wert ($written WERT oder --$name=WERT)" . ($name === 'host' ? '; die Hilfe ist --help oder -?' : '') . '.');
+        }
+        $value = $next;
+        $i++;
+      }
+      // -h=db1 or --host==db1 would otherwise connect to the host "=db1": no value starts with "=".
+      if ($valued && $value !== null && str_starts_with($value, '=')) {
+        throw new HardenException(Text::printable($written) . ": der Wert beginnt mit = (gemeint war wohl --$name=WERT oder $written WERT).");
+      }
+      if ($valued && $value === '') {
+        throw new HardenException(Text::printable($written) . " braucht einen Wert ($written WERT oder --$name=WERT).");
+      }
+      if (array_key_exists($name, $o->values)) {
+        throw new HardenException("--$name ist mehrfach angegeben (auch als Kurzform oder psql-Name gezählt).");
+      }
+      $o->values[$name] = $value ?? true;
+      $spelled[$name] = $written;
     }
-    if (isset($o->values['password'])) {
-      throw new HardenException('Passwörter gehören nicht auf die Kommandozeile (Prozessliste, Shell-Historie). PGPASSWORD oder pgpass-Datei verwenden.');
+    // Options without a command would print the help with exit code 0 — in a script a forgotten value ("--host check") then passes.
+    if ($o->command === '' && $o->values !== []) {
+      throw new HardenException('Kein Befehl angegeben (check, plan, verify, client, apply, rollback, rules) — fehlt vor dem Befehl ein Wert, etwa nach ' . Text::printable((string) end($spelled)) . '?');
+    }
+    // For client --user is an account of this machine; -U and --username always mean the database user, as in psql.
+    if ($o->command === 'client' && in_array($spelled['user'] ?? null, ['-U', '--username'], true)) {
+      throw new HardenException($spelled['user'] . ' ist der Datenbankbenutzer; client prüft ein Konto dieses Rechners: --user=KONTO.');
     }
     return $o;
   }
@@ -2207,7 +2257,9 @@ final class App
                        Datei nur für den Betreiber lesbar; gilt für check, plan, verify und apply
 
       Verbindung: --host --port --user --dbname --sslmode --databases=a,b
-      Passwort über PGPASSWORD oder pgpass-Datei, nie auf der Kommandozeile.
+                  wie bei psql auch -h HOST -p PORT -U BENUTZER -d DATENBANK (und --username); lang --host=db1 oder
+                  --host db1, kurz -h db1 oder -hdb1 (ohne =). -U und --username sind immer der Datenbankbenutzer, bei client: --user=KONTO
+      Passwort über PGPASSWORD oder pgpass-Datei, nie auf der Kommandozeile. Hilfe: --help oder -?
       Exit: 0 ohne Befund · 1 Befunde · 3 unvollständig geprüft · 2 Abbruch
 
       {$notice}
