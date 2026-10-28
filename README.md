@@ -18,7 +18,7 @@ It covers `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256 password storage,
   of obvious candidates (plus an optional operator list of at most 100 terms; no external wordlists); a report only names the role, never the password
 - **Run-tested on PostgreSQL 14, 15, 16, 17, 18 and 19rc1** (Docker, Debian 13) and PostgreSQL 18 on Windows 11 — the matrix shows that the tool
   runs and where versions differ, not how well each rule detects problems; see [tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md) (German)
-- Output as terminal text, HTML or JSON; preliminary mappings of the rules to BSI IT-Grundschutz `APP.4.3`, ISO/IEC 27001:2022 Annex A and the CIS PostgreSQL Benchmark (identifiers not yet verified; for CIS an own grouping, not CIS identifiers)
+- Output as terminal text, HTML or JSON; mappings of the rules to BSI IT-Grundschutz `APP.4.3` (identifiers verified against the BSI original) and, preliminary, to ISO/IEC 27001:2022 Annex A and the CIS PostgreSQL Benchmark (identifiers not yet verified; for CIS an own grouping, not CIS identifiers)
 
 pg-harden is not an implementation of a published benchmark and does not replace one, nor a review of your own requirements. It adds a change
 plan with rollback, a check of the client machine and an `apply` step.
@@ -269,8 +269,9 @@ to third parties, define a retention period.
 
 - `rules/*.json` — rules as data: check by parameter (`setting`), SQL (`query`, one row per finding) or built-in check (`weak_passwords`, `os`,
   `client`), version, required rights (`requires`), platform, command (`check`/`client`), fix (`conf`, `sql`, `hba`, `manual`) and way back, rationale
-- `mappings/*.json` — preliminary mappings to BSI IT-Grundschutz `APP.4.3 Relationale Datenbanken`, ISO/IEC 27001:2022 Annex A and the CIS
-  PostgreSQL Benchmark (own grouping along sections 1–7, not CIS identifiers); the identifiers of all three are not yet verified. Identifiers and own short titles only,
+- `mappings/*.json` — mapping to BSI IT-Grundschutz `APP.4.3 Relationale Datenbanken` (Edition 2023, identifiers and titles verified against the official BSI PDF)
+  and preliminary mappings to ISO/IEC 27001:2022 Annex A and the CIS PostgreSQL Benchmark (own grouping along sections 1–7, not CIS
+  identifiers; the identifiers of ISO and CIS are not yet verified). Identifiers and own short titles only,
   no standard or benchmark text; a mapping says which rules relate to a requirement, not that it is fulfilled. CIS Benchmarks is a trademark of
   the Center for Internet Security; pg-harden is not affiliated with, endorsed or certified by CIS
 
@@ -293,8 +294,8 @@ in and run as root there. Practise against `lab/` only — never against product
 
 `tests/` contains `allowlist-test.php` (unit test of the allowlist that `apply` and `rollback` pass SQL through: `php tests/allowlist-test.php`),
 `catalog-test.php` (offline test of the rule catalog, framework mappings and `Verifier`), `windows-redirect.php` and `windows-admin-test.ps1`
-(Windows path verification, handle ACLs and directory pinning `WindowsPin` against junctions; the second one, with a temporary local account in an
-elevated PowerShell, has not been run yet),
+(Windows path verification, handle ACLs and directory pinning `WindowsPin` against junctions; the second one runs with a temporary local account
+without administrator rights in an elevated PowerShell),
 `lab-matrix.sh` (regression run of `apply`/`rollback` in a container, calls `lab-identity.php` for the identity rules when writing and reading as root),
 `lab-visibility.sh` and `lab-upgrade.sh` (catalog visibility, `pg_upgrade`,
 restore) and `run-version-matrix.sh` with `matrix-table.php` (version matrix, result in [tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)). The
@@ -305,8 +306,8 @@ against an instance with real data.
 
 0.4.0 (unreleased): Windows write side holds the server's directories against a swap for a junction via open directory handles without `FILE_SHARE_DELETE` (`WindowsPin`),
 handle-based ACL reading (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), restricted ACLs for journals and output files on Windows (checked when a journal is loaded), `verify`
-support for client reports, rule catalog expanded to 86 rules (74 for `check`, 12 for `client`), preliminary mappings for BSI IT-Grundschutz
-`APP.4.3` and the CIS PostgreSQL Benchmark added. Details in [CHANGELOG.md](CHANGELOG.md).
+support for client reports, rule catalog expanded to 86 rules (74 for `check`, 12 for `client`), mappings for BSI IT-Grundschutz `APP.4.3`
+(identifiers verified against the BSI original) and, preliminary, the CIS PostgreSQL Benchmark added. Details in [CHANGELOG.md](CHANGELOG.md).
 
 0.3.2 (2026-10-26): **security fix** for `check` and `client` as root (another account could make them read a file of root through a
 link, steer the process probes to a foreign process via `postmaster.pid`, or stop `check` with a FIFO); files of other accounts are now

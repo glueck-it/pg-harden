@@ -55,7 +55,8 @@
   - **Tests:** `tests/windows-redirect.php` (throw-away directories in `%TEMP%`, no administrator rights needed), `tests/catalog-test.php`
     (offline test for the rule catalog, framework mappings and `Verifier`) and `tests/windows-admin-test.ps1` (for an elevated PowerShell:
     creates a temporary local non-administrator account, tests `client --user`, `check` and `apply`/`rollback` directory pinning against
-    junctions in its profile and data directory, and removes the account and its profile afterwards; not run yet).
+    junctions in its profile and data directory, and removes the account and its `ProfileList` entry afterwards; the account never
+    logs on, so Windows creates no profile of its own; ran on Windows 11 on 2026-10-28, 19 of 19 cases green).
 - **Expanded hardening catalog (86 rules), OS/client probes, BSI IT-Grundschutz APP.4.3 and CIS PostgreSQL Benchmark mappings:**
   - **PostgreSQL server rules (`rules/postgresql.json`):** added `tls.ciphers`, `hba.weak_options` (`ident` over TCP and
     `clientcert=verify-ca`), `auth.passwordless_or_expired`, `roles.replication_login`, `roles.createrole_self_grant` (PostgreSQL 16+),
@@ -73,13 +74,15 @@
   - **Client rules and probes (`rules/client.json`, `src/Client.php`):** added `client.psql_history` (checks permissions/ACLs and scans
     `psql_history` / `.psql_history` for `CREATE/ALTER ROLE … PASSWORD`, connection URIs with passwords and `PGPASSWORD`, without
     printing values).
-  - **Preliminary framework mappings (`mappings/bsi-app43.json`, `mappings/iso27001-2022.json`, `mappings/cis-postgresql.json`):** a first
-    mapping for BSI IT-Grundschutz Baustein `APP.4.3 Relationale Datenbanken` (`APP.4.3.A1` to `APP.4.3.A25`; it assigns at least one rule
-    to each requirement treated as active — an assignment, not fulfilment; several requirements are organisational and cannot be checked
-    by a tool), a new `mappings/cis-postgresql.json` (an own grouping along sections 1–7 of the CIS PostgreSQL Benchmark with own short
-    titles — the numbers are not CIS identifiers), and every rule assigned in all three. Identifiers of all three are not yet verified
-    against the originals (`"verified": false`, reports say so). CIS Benchmarks is a trademark of the Center for Internet Security;
-    pg-harden is not affiliated with, endorsed or certified by CIS.
+  - **Framework mappings (`mappings/bsi-app43.json`, `mappings/iso27001-2022.json`, `mappings/cis-postgresql.json`):** a mapping
+    for BSI IT-Grundschutz-Kompendium (Edition 2023) Baustein `APP.4.3 Relationale Datenbanken` (identifiers, titles and dropped
+    requirements verified against the official BSI PDF: `APP.4.3.A1` to `APP.4.3.A25` with 17 active requirements — `A2`, `A5`, `A6`,
+    `A7`, `A8`, `A10`, `A14` and `A15` are dropped in Edition 2023; it assigns at least one rule to each active requirement — an
+    assignment, not fulfilment; several requirements
+    are organisational and cannot be checked by a tool), a new `mappings/cis-postgresql.json` (an own grouping along sections 1–7 of the
+    CIS PostgreSQL Benchmark with own short titles — the numbers are not CIS identifiers), and every rule assigned in all three.
+    Identifiers of ISO 27001 and CIS are not yet verified against the originals (`"verified": false`, reports say so). CIS Benchmarks is a
+    trademark of the Center for Internet Security; pg-harden is not affiliated with, endorsed or certified by CIS.
   - **Corrections from review:** `hba.weak_options` reports only the checked option (never other options of the line such as
     `ldapbindpasswd`/`radiussecret`) and no longer counts `ident` on loopback addresses as network access; `roles.replication_login` only
     roles that can log in; `tls.ciphers` also single weak suites (`RC4-SHA`, `DES-CBC3-SHA` …); `log.pgaudit` also accepts `pgaudit.log` /

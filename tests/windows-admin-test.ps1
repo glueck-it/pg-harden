@@ -40,10 +40,20 @@ $adminDir = Join-Path $workRoot 'AdminOnly'
 $journalDir = Join-Path $workRoot 'Journal'
 $foreignDir = Join-Path $workRoot 'ForeignOut'
 $regKeyPath = $null
+$regKeyCreated = $false
 $userSid = $null
 $userCreated = $false
 $links = New-Object System.Collections.Generic.List[string]
 $failed = 0
+# Der Arbeitsordner wird am Ende entfernt: er muss neu sein, ein gleichnamiger Ordner (Rest eines alten Laufs) bleibt unangetastet.
+if (Test-Path -LiteralPath $workRoot) {
+  [Console]::Error.WriteLine("FEHLER: $workRoot gibt es schon — abgebrochen, nichts geändert.")
+  exit 2
+}
+if (Get-LocalUser -Name $userName -ErrorAction SilentlyContinue) {
+  [Console]::Error.WriteLine("FEHLER: Konto $userName gibt es schon — abgebrochen, nichts geändert.")
+  exit 2
+}
 
 function Check-Case([string]$Name, [string]$Want, [scriptblock]$Action) {
   try {
@@ -57,6 +67,16 @@ function Check-Case([string]$Name, [string]$Want, [scriptblock]$Action) {
     $script:failed++
     Write-Host ("FEHLER " + $Name + ": " + $got + " (erwartet: " + $Want + ")") -ForegroundColor Red
   }
+}
+
+# client --user=<Testkonto> als JSON; was kein JSON ist (Fehlermeldung von pg-harden), wird gezeigt statt das Skript abzubrechen.
+function Invoke-ClientJson([string]$User) {
+  # Windows PowerShell 5.1 macht mit "Stop" und 2>&1 schon aus der ersten stderr-Zeile einen Abbruch: hier nur sammeln.
+  $ErrorActionPreference = 'Continue'
+  $raw = (& $script:phpPath $script:entryPoint client "--user=$User" --format=json 2>&1 | Out-String)
+  try { return ($raw | ConvertFrom-Json) } catch {}
+  Write-Host "FEHLER client --user lieferte kein JSON:`n$raw" -ForegroundColor Red
+  return [pscustomobject]@{ results = @() }
 }
 
 function New-Junction([string]$Link, [string]$Target) {
@@ -78,10 +98,10 @@ try {
   # 1. Lokales Standardkonto ohne Admin-Rechte anlegen
   $rawPass = 'PgH!' + [guid]::NewGuid().ToString('N').Substring(0, 12) + '9aA'
   $secPass = ConvertTo-SecureString $rawPass -AsPlainText -Force
-  New-LocalUser -Name $userName -Password $secPass -Description 'pg-harden temporäres Testkonto' -AccountNeverExpires -UserMayNotChangePassword | Out-Null
+  # Deaktiviert: das Konto meldet sich nie an, es braucht nur eine SID, die Besitzer und Berechtigter sein kann.
+  New-LocalUser -Name $userName -Password $secPass -Description 'pg-harden temporäres Testkonto' -AccountNeverExpires -UserMayNotChangePassword -Disabled | Out-Null
   $userCreated = $true
   $userSid = (New-Object Security.Principal.NTAccount($userName)).Translate([Security.Principal.SecurityIdentifier]).Value
-  $cred = New-Object System.Management.Automation.PSCredential("$env:COMPUTERNAME\$userName", $secPass)
   Write-Host "--     Testkonto angelegt: $userName ($userSid)"
 
   # 2. Wegwerf-Verzeichnisse unter %TEMP% aufbauen
@@ -100,10 +120,13 @@ try {
 
   # Profilverzeichnis für client --user=<Testkonto> in ProfileList eintragen
   $regKeyPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$userSid"
-  if (-not (Test-Path -LiteralPath $regKeyPath)) {
-    New-Item -Path $regKeyPath -Force | Out-Null
-    New-ItemProperty -LiteralPath $regKeyPath -Name 'ProfileImagePath' -Value $profileDir -PropertyType ExpandString -Force | Out-Null
+  if (Test-Path -LiteralPath $regKeyPath) {
+    throw "ProfileList enthält schon einen Eintrag für $userSid — abgebrochen, nichts an fremden Einträgen geändert."
   }
+  # Ohne -Force: ein inzwischen entstandener Schlüssel wirft einen Fehler, statt übernommen zu werden; gelöscht wird nur der eigene.
+  New-Item -Path $regKeyPath | Out-Null
+  $regKeyCreated = $true
+  New-ItemProperty -LiteralPath $regKeyPath -Name 'ProfileImagePath' -Value $profileDir -PropertyType ExpandString -Force | Out-Null
 
   # Eigene Dateien im Profil des Testkontos
   $ownPgpass = Join-Path $profileDir 'AppData\Roaming\postgresql\pgpass.conf'
@@ -112,24 +135,18 @@ try {
   icacls $ownPgpass /grant "*S-1-1-0:R" >$null
   Set-Content -LiteralPath (Join-Path $profileDir 'Scripts\deploy.ps1') -Value "PGPASSWORD=ownSecret`n" -Encoding Ascii -NoNewline
 
-  # Junction im Profil, vom nicht-privilegierten Testkonto (bzw. in dessen Ordner) auf das Admin-Verzeichnis gelegt
+  # Junction im Profil auf das Admin-Verzeichnis. Angelegt vom Skript, nicht durch eine Anmeldung als Testkonto: eine Anmeldung
+  # (Start-Process -Credential) lässt Windows ein eigenes Profil anlegen und den Eintrag in ProfileList umbiegen — dann prüfte
+  # client --user ein anderes Profil. Dass ein Konto ohne Administratorrechte Junctions anlegen kann, belegt tests/windows-redirect.php.
   $juncInDocs = Join-Path $profileDir 'Documents\AdminLink'
-  $runAsOk = $false
-  try {
-    $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList "/c mklink /J `"$juncInDocs`" `"$adminDir`"" -Credential $cred -WindowStyle Hidden -PassThru -Wait -ErrorAction Stop
-    if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $juncInDocs)) {
-      $links.Add($juncInDocs)
-      $runAsOk = $true
-    }
-  } catch {}
-  if (-not $runAsOk) {
-    New-Junction $juncInDocs $adminDir | Out-Null
-  }
+  New-Junction $juncInDocs $adminDir | Out-Null
   Check-Case 'Junction im Profil des Standardkontos angelegt' 'ja' { if (Test-Path -LiteralPath $juncInDocs) { 'ja' } else { 'nein' } }
+  Check-Case 'ProfileList zeigt auf das vorbereitete Profil' 'ja' {
+    if ([string](Get-ItemProperty -LiteralPath $regKeyPath).ProfileImagePath -eq $profileDir) { 'ja' } else { 'nein: ' + (Get-ItemProperty -LiteralPath $regKeyPath).ProfileImagePath }
+  }
 
   # 3. client --user=<Testkonto>: eigene Datei wird geprüft, Junction zum Admin-Ordner wird abgewiesen
-  $clientOut = & $phpPath $entryPoint client "--user=$userName" --format=json
-  $clientReport = $clientOut | ConvertFrom-Json
+  $clientReport = Invoke-ClientJson $userName
   $aclRes = $clientReport.results | Where-Object { $_.id -eq 'client.pgpass_acl' }
   $secRes = $clientReport.results | Where-Object { $_.id -eq 'client.secrets_in_files' }
   Check-Case 'client --user findet offene ACL der eigenen pgpass.conf (über Handle)' 'fail' { [string]$aclRes.status }
@@ -145,12 +162,13 @@ try {
   Remove-Item -LiteralPath (Join-Path $profileDir 'AppData\Roaming\postgresql') -Force
   New-Junction (Join-Path $profileDir 'AppData\Roaming\postgresql') $adminDir | Out-Null
 
-  $clientOut2 = & $phpPath $entryPoint client "--user=$userName" --format=json
-  $clientReport2 = $clientOut2 | ConvertFrom-Json
+  $clientReport2 = Invoke-ClientJson $userName
   $aclRes2 = $clientReport2.results | Where-Object { $_.id -eq 'client.pgpass_acl' }
   Check-Case 'client --user weist pgpass.conf hinter Junction bei ACL-Prüfung ab' 'nicht geprüft' {
-    $unch = @($aclRes2.unchecked | Where-Object { $_ -like '*Junction*' })
-    if ($aclRes2.findings.Count -eq 0 -and $unch.Count -gt 0) { 'nicht geprüft' } else { 'durchgelassen' }
+    # Im Bericht stehen nicht geprüfte Stellen als notes mit "nicht geprüft: …" und incomplete = true (es gibt kein Feld unchecked).
+    $unch = @($aclRes2.notes | Where-Object { $_ -like 'nicht geprüft:*Junction*' })
+    if (@($aclRes2.findings).Count -eq 0 -and $aclRes2.incomplete -eq $true -and $unch.Count -gt 0) { 'nicht geprüft' }
+    else { 'durchgelassen (findings: ' + @($aclRes2.findings).Count + ', notes: ' + (@($aclRes2.notes) -join ' | ') + ')' }
   }
 
   # 4. Datenverzeichnis (check + apply/rollback mit WindowsPin) unter Kontrolle des Standardkontos
@@ -218,8 +236,18 @@ WindowsPin::end();
 echo json_encode($out, JSON_UNESCAPED_UNICODE);
 '@
   $phpScriptFile = Join-Path $workRoot 'run-checks.php'
-  Set-Content -LiteralPath $phpScriptFile -Value ("<?php`ndeclare(strict_types=1);`n" + $phpTest) -Encoding UTF8
-  $resJson = (& $phpPath $phpScriptFile $entryPoint $dataDir $adminDir $journalDir $foreignDir) | ConvertFrom-Json
+  # UTF-8 ohne Byte-Order-Mark: Set-Content -Encoding UTF8 setzt in Windows PowerShell 5.1 eine BOM vor "<?php", dann ist
+  # declare(strict_types=1) nicht mehr die erste Anweisung und PHP bricht ab.
+  [IO.File]::WriteAllText($phpScriptFile, "<?php`ndeclare(strict_types=1);`n" + $phpTest, (New-Object System.Text.UTF8Encoding($false)))
+  $ErrorActionPreference = 'Continue'
+  $rawOut = (& $phpPath $phpScriptFile $entryPoint $dataDir $adminDir $journalDir $foreignDir 2>&1 | Out-String)
+  $ErrorActionPreference = 'Stop'
+  $resJson = $null
+  try { $resJson = $rawOut | ConvertFrom-Json } catch {}
+  if ($null -eq $resJson) {
+    Write-Host "FEHLER PHP-Prüfskript lieferte kein JSON:`n$rawOut" -ForegroundColor Red
+    $resJson = [pscustomobject]@{}
+  }
 
   Check-Case 'Files::prepareDir weist leeres Verzeichnis des Standardkontos ab' 'abgewiesen' { [string]$resJson.foreign_dir }
 
@@ -241,25 +269,14 @@ echo json_encode($out, JSON_UNESCAPED_UNICODE);
   foreach ($l in $links) {
     Remove-JunctionSafe $l
   }
-  # Start-Process -Credential lädt oder legt ein Profil des Testkontos an: nur dieses (Filter auf seine SID) wird entfernt, mit
-  # Wiederholung, falls Windows den Registrierungszweig noch kurz geladen hält.
-  if ($userSid) {
-    $profileGone = $false
-    for ($i = 0; $i -lt 10 -and -not $profileGone; $i++) {
-      try {
-        Get-CimInstance Win32_UserProfile -Filter "SID='$userSid'" | Remove-CimInstance -ErrorAction Stop
-        $profileGone = $true
-      } catch {
-        Start-Sleep -Seconds 1
-      }
-    }
-    if (-not $profileGone) {
+  # Das Testkonto meldet sich nie an, Windows legt also kein eigenes Profil an: zu entfernen ist nur der eigene ProfileList-Eintrag.
+  if ($regKeyCreated -and (Test-Path -LiteralPath $regKeyPath)) {
+    try {
+      Remove-Item -LiteralPath $regKeyPath -Recurse -Force -ErrorAction Stop
+    } catch {
       $script:failed++
-      Write-Host "FEHLER Profil des Testkontos ($userSid) ließ sich nicht entfernen — von Hand unter Systemeigenschaften > Benutzerprofile löschen" -ForegroundColor Red
+      Write-Host "FEHLER ProfileList-Eintrag $regKeyPath ließ sich nicht entfernen ($($_.Exception.Message))" -ForegroundColor Red
     }
-  }
-  if ($regKeyPath -and (Test-Path -LiteralPath $regKeyPath)) {
-    Remove-Item -LiteralPath $regKeyPath -Recurse -Force -ErrorAction SilentlyContinue
   }
   if ($userCreated) {
     try {
@@ -270,8 +287,12 @@ echo json_encode($out, JSON_UNESCAPED_UNICODE);
       Write-Host "FEHLER Testkonto $userName ließ sich nicht entfernen ($($_.Exception.Message)) — von Hand löschen: Remove-LocalUser -Name $userName" -ForegroundColor Red
     }
   }
+  # rmdir /s folgt keiner Junction (entfernt nur den Link); die Junctions sind oben ohnehin schon entfernt.
   if (Test-Path -LiteralPath $workRoot) {
-    Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
+    cmd /c rmdir /s /q "`"$workRoot`"" >$null 2>&1
+  }
+  if (Test-Path -LiteralPath $workRoot) {
+    Write-Host "FEHLER Arbeitsordner blieb liegen — von Hand in einer Administrator-PowerShell: cmd /c rmdir /s /q `"$workRoot`"" -ForegroundColor Red
   }
 }
 

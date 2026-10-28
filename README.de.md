@@ -286,9 +286,9 @@ ablegen, vor einer Weitergabe an Dritte prüfen, Aufbewahrung festlegen.
 - `rules/*.json` — Regeln als Daten: Prüfung per Parameter (`setting`), SQL (`query`, je Befund eine Zeile) oder
   eingebauter Prüfung (`weak_passwords`, `os`, `client`), Version, benötigte Rechte (`requires`), Plattform, Befehl
   (`check`/`client`), Korrektur (`conf`, `sql`, `hba`, `manual`) und Rückweg, Begründung
-- `mappings/*.json` — vorläufige Zuordnung zu BSI IT-Grundschutz Baustein `APP.4.3 Relationale Datenbanken`, ISO/IEC 27001:2022 Annex A
-  und CIS PostgreSQL Benchmark (eigene Gliederung entlang der Abschnitte 1–7, keine CIS-Kennungen); die Kennungen aller drei sind noch
-  ungeprüft. Nur Kennungen
+- `mappings/*.json` — Zuordnung zu BSI IT-Grundschutz Baustein `APP.4.3 Relationale Datenbanken` (Edition 2023, Kennungen und Titel gegen das
+  BSI-Original-PDF geprüft) sowie vorläufige Zuordnungen zu ISO/IEC 27001:2022 Annex A und CIS PostgreSQL Benchmark (eigene Gliederung entlang der Abschnitte
+  1–7, keine CIS-Kennungen; die Kennungen von ISO und CIS sind noch ungeprüft). Nur Kennungen
   und eigene Kurztitel, kein Norm- oder Benchmark-Text; eine Zuordnung sagt, welche Regeln eine Anforderung berühren, nicht, dass sie erfüllt
   ist. CIS Benchmarks ist eine Marke des Center for Internet Security; pg-harden steht in keiner Verbindung zu CIS und ist von CIS weder
   empfohlen noch zertifiziert
@@ -317,8 +317,8 @@ das Verzeichnis hineinkopieren und als root im Container ausführen. Übungen nu
 
 `tests/` enthält: `allowlist-test.php` (Unit-Test der Allowlist, die `apply` und `rollback` passieren müssen; `php tests/allowlist-test.php`),
 `catalog-test.php` (Offline-Test für Regelkatalog, Norm-Zuordnungen und `Verifier`), `windows-redirect.php` und `windows-admin-test.ps1`
-(Windows-Wegprüfung, Handle-ACLs und Verzeichnissperre `WindowsPin` gegen Junctions; der zweite, mit einem temporären lokalen Konto in einer
-Administrator-PowerShell, ist noch nicht gelaufen),
+(Windows-Wegprüfung, Handle-ACLs und Verzeichnissperre `WindowsPin` gegen Junctions; der zweite läuft mit einem temporären lokalen Konto
+ohne Administratorrechte in einer Administrator-PowerShell),
 `lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container, ruft `lab-identity.php` für die Identitätsregeln beim Schreiben und Lesen als
 root auf), `lab-visibility.sh` und `lab-upgrade.sh` (Katalog-Sichtbarkeit,
 `pg_upgrade`, Wiederherstellung) und `run-version-matrix.sh` mit `matrix-table.php` (Versionsmatrix, Ergebnis in `VERSIONSMATRIX.md`).
@@ -329,8 +329,8 @@ Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
 
 0.4.0 (unveröffentlicht): Windows-Schreibseite hält die Serververzeichnisse gegen einen Tausch gegen Junctions fest über offene Verzeichnis-Handles ohne `FILE_SHARE_DELETE` (`WindowsPin`), ACL-Lesen über das
 offene Datei-Handle (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), enge ACLs für Journale und Ausgabedateien unter Windows (beim Laden eines Journals geprüft), `verify` auch für
-Client-Berichte, Regelkatalog auf 86 Regeln erweitert (74 für `check`, 12 für `client`), vorläufige Zuordnungen zu BSI IT-Grundschutz `APP.4.3`
-und CIS PostgreSQL Benchmark ergänzt. Einzelheiten in [CHANGELOG.md](CHANGELOG.md) (englisch).
+Client-Berichte, Regelkatalog auf 86 Regeln erweitert (74 für `check`, 12 für `client`), Zuordnungen zu BSI IT-Grundschutz `APP.4.3`
+(Kennungen gegen das BSI-Original geprüft) und, vorläufig, zum CIS PostgreSQL Benchmark ergänzt. Einzelheiten in [CHANGELOG.md](CHANGELOG.md) (englisch).
 
 0.3.2 (26.10.2026): **Sicherheitskorrektur** für `check` und `client` als root (ein anderes Konto konnte sie über einen Link eine Datei
 von root lesen lassen, die Prozessprüfungen über `postmaster.pid` auf einen fremden Prozess lenken oder `check` mit einer FIFO anhalten);

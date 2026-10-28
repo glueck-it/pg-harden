@@ -54,8 +54,14 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
     Umbenennen im festgehaltenen Datenverzeichnis weiter möglich, Abbruch ohne aktive Sperre und nach beendetem Helfer,
     Wiederherstellung nach beendetem Helfer und über `Guard::onShutdown`, enge ACL des Journal-Verzeichnisses. `--out` über eine
     vorhandene Datei einzeln geprüft (neue Datei mit enger ACL, keine Temp-Datei zurück).
-  - `tests/windows-admin-test.ps1` (lokales Testkonto ohne Administratorrechte, nur in einer Administrator-PowerShell) liegt bereit
-    und ist **noch nicht gelaufen**.
+  - `tests/windows-admin-test.ps1` auf Windows 11 in einer Administrator-PowerShell, mit einem eigens angelegten lokalen Konto ohne
+    Administratorrechte (Profil und Datenverzeichnis im Besitz dieses Kontos, Junctions darin auf einen Ordner nur für Administratoren),
+    19 Fälle grün: `client --user` (eigene ACL und eigenes Skript gefunden, nichts hinter der Junction gelesen, `pgpass.conf` hinter
+    der Junction als nicht geprüft gemeldet), `check` (`postmaster.pid`, ACL über das Handle), `apply`/`rollback` (`WindowsPin` sperrt
+    Datenverzeichnis und neues `conf.d`, Zurückspielen, `overwrite`/`create` hinter der Junction abgewiesen, Admin-Ordner
+    unversehrt), `--dir` eines fremden Kontos abgewiesen, Konto, `ProfileList`-Eintrag und Arbeitsordner wieder entfernt. Gelaufen
+    ist der Skriptstand vor drei späteren Absicherungen des Skripts selbst (Abbruch bei schon vorhandenem Arbeitsordner, Konto oder
+    `ProfileList`-Eintrag; Konto deaktiviert angelegt); die Wiederholung mit dem Endstand steht aus.
   - Regelkatalog mit 86 Regeln: neu `tls.ciphers`, `hba.weak_options`, `auth.passwordless_or_expired`, `roles.replication_login`,
     `roles.createrole_self_grant`, `db.default_acl_public`, `db.rls_policies_inactive`, `code.fdw_secrets`, `code.event_triggers`,
     `log.lock_waits`, `data.crash_safety`, `os.ssl_cert_expiry`, `os.tablespace_permissions`, `client.psql_history`; erweitert
@@ -65,7 +71,8 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
     `127.0.0.1`, LDAP-Zeile mit `clientcert=verify-ca` und Bindungspasswort, `REPLICATION` mit und ohne `LOGIN`, `ssl_ciphers` mit
     `RC4-SHA`, Event-Trigger): Befunde wie erwartet, `ident` über `127.0.0.1` und die Rolle ohne `LOGIN` ohne Befund, das
     Bindungspasswort steht nicht im Bericht, `db.rls_policies_inactive` meldet die Tabelle mit RLS ohne Policy.
-  - Ebenfalls neu: vorläufige Zuordnungen zu BSI `APP.4.3` und CIS PostgreSQL Benchmark (Kennungen ungeprüft), `verify` für
+  - Ebenfalls neu: Zuordnungen zu BSI `APP.4.3` (Kennungen und Titel gegen das BSI-Original-PDF geprüft) und, vorläufig, zum CIS PostgreSQL Benchmark
+    (Kennungen ungeprüft), `verify` für
     Client-Berichte, enge Windows-ACLs für Journale und Ausgabedateien, `tests/catalog-test.php`.
 - Nicht in dieser Matrix: Windows mit 14 bis 17, andere Linux-Familien als Debian/Alpine, Cluster mit Replikation.
 
