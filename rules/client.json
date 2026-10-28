@@ -170,6 +170,21 @@
       "automation": "manual",
       "rationale": "Ein abgelaufenes Zertifikat lässt die Anmeldung scheitern — bei Zertifikatsanmeldung ohne Rückfall, sonst zum Zeitpunkt, an dem niemand daran denkt.",
       "remediation": "Zertifikat erneuern und Ablauf überwachen."
+    },
+    {
+      "id": "client.psql_history",
+      "title": "psql-Befehlshistorie ist nur für das Konto lesbar und enthält keine Passwörter",
+      "category": "Client: Zugangsdaten",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "command": "client",
+      "legal_notice": true,
+      "check": { "type": "client", "probe": "psql_history" },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Wer Passwörter über CREATE/ALTER ROLE … PASSWORD statt über \\password setzt, hinterlässt sie im Klartext in .psql_history bzw. %APPDATA%\\postgresql\\psql_history. Zu offene Dateirechte legen zudem sämtliche interaktiv abgesetzten Abfragen offen. Ausgegeben werden nur Datei und Zeile, nie der Inhalt.",
+      "remediation": "Betroffene Zeilen aus der Historie löschen, das Passwort rotieren (es gilt als bekannt), Rechte der Datei auf 0600 bzw. das eigene Konto beschränken und Passwörter künftig mit \\password setzen (oder HISTCONTROL / PSQL_HISTORY=/dev/null nutzen)."
     }
   ]
 }

@@ -153,19 +153,19 @@ final class Fs
   }
 
   /**
-   * Windows: whether $path, below the profile $base of an account an administrator examines, may lead elsewhere. Without an
-   * identity switch the administrator would follow a junction or link the account placed in its profile to a file the account
-   * itself cannot read (another profile, a file of the administrators) and report it as the account's. Decided on the final path
+   * Windows: whether $path, below $base (the profile of an examined account, or the server's data directory), may lead elsewhere.
+   * Without an identity switch an administrator would follow a junction or link the account placed there to another file (another
+   * profile, a file of the administrators) and report or change it. Decided on the final path
    * Windows reports for an opened handle (readlink, GetFinalPathNameByHandle — no realpath cache, long names, also through a
-   * junction to a volume GUID path): it must be exactly the profile's final path plus the remaining components. Counted as
-   * redirected as well: "..", a path that cannot be opened (missing, access denied), a profile that cannot be resolved, and a path
-   * that reaches into the profile under another spelling (short name, a link outside) — its components cannot be attributed.
-   * Forward slashes, case and a leading "\\?\" are only spelling and compared as such. Paths that stay outside the profile (system
+   * junction to a volume GUID path): it must be exactly the base's final path plus the remaining components. Counted as
+   * redirected as well: "..", a path that cannot be opened (missing, access denied), a base that cannot be resolved, and a path
+   * that reaches into $base under another spelling (short name, a link outside) — its components cannot be attributed.
+   * Forward slashes, case and a leading "\\?\" are only spelling and compared as such. Paths that stay outside $base (system
    * files) are not the account's to redirect and are not judged. Only the content and ACL of a file are
    * guarded; whether a file exists and its size may still be taken through a redirect (no content). Elsewhere (Unix) always
    * false: readerFor decides.
    */
-  public static function windowsRedirected(string $path, string $base): bool
+  public static function windowsRedirected(string $path, string $base, ?string $resolvedTarget = null, ?string $resolvedBase = null): bool
   {
     if (!Platform::windows()) {
       return false;
@@ -177,13 +177,13 @@ final class Fs
     };
     $literalBase = $plain($base);
     $literal = $plain($path);
-    $profile = $final($base);
-    $target = $final($path);
+    $profile = $resolvedBase !== null ? $plain($resolvedBase) : $final($base);
+    $target = $resolvedTarget !== null ? $plain($resolvedTarget) : $final($path);
     if ($profile === null) {
       return true;
     }
     if ($literal !== $literalBase && !str_starts_with($literal, $literalBase . '\\')) {
-      // Outside the profile as written: judged only if it nevertheless ends up inside it.
+      // Outside the base as written: judged only if it nevertheless ends up inside it.
       return $target !== null && ($target === $profile || str_starts_with($target, $profile . '\\'));
     }
     $rest = array_filter(explode('\\', substr($literal, strlen($literalBase))), fn($s) => $s !== '' && $s !== '.');
@@ -508,6 +508,126 @@ final class Platform
     return false;
   }
 
+  public const WIN_HANDLE_PS = <<<'PS'
+    Add-Type -TypeDefinition '
+    using System;
+    using System.ComponentModel;
+    using System.Runtime.InteropServices;
+    using System.Security.AccessControl;
+    using System.Text;
+    using Microsoft.Win32.SafeHandles;
+    public static class WinHandle {
+      [StructLayout(LayoutKind.Sequential)]
+      private struct FILETIME { public uint dwLowDateTime; public uint dwHighDateTime; }
+      [StructLayout(LayoutKind.Sequential)]
+      private struct BY_HANDLE_FILE_INFORMATION {
+        public uint FileAttributes;
+        public FILETIME CreationTime, LastAccessTime, LastWriteTime;
+        public uint VolumeSerialNumber, FileSizeHigh, FileSizeLow, NumberOfLinks, FileIndexHigh, FileIndexLow;
+      }
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+      private static extern SafeFileHandle CreateFileW(
+        string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+        IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+      [DllImport("kernel32.dll", SetLastError = true)]
+      private static extern bool GetFileInformationByHandle(
+        SafeFileHandle hFile, out BY_HANDLE_FILE_INFORMATION lpFileInformation);
+      [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+      private static extern uint GetFinalPathNameByHandleW(
+        SafeFileHandle hFile, StringBuilder lpszFilePath, uint cchFilePath, uint dwFlags);
+      [DllImport("advapi32.dll", SetLastError = true)]
+      private static extern uint GetSecurityInfo(
+        SafeFileHandle handle, int ObjectType, uint SecurityInfo,
+        out IntPtr ppsidOwner, out IntPtr ppsidGroup, out IntPtr ppDacl,
+        out IntPtr ppSacl, out IntPtr ppSecurityDescriptor);
+      [DllImport("advapi32.dll", SetLastError = true)]
+      private static extern uint GetSecurityDescriptorLength(IntPtr pSecurityDescriptor);
+      [DllImport("kernel32.dll", SetLastError = true)]
+      private static extern IntPtr LocalFree(IntPtr hMem);
+
+      public static SafeFileHandle Open(string path, bool readSecurity, bool holdAgainstRename, bool shareWrite) {
+        // 0x80 = FILE_READ_ATTRIBUTES, 0x01 = FILE_LIST_DIRECTORY, 0x00020000 = READ_CONTROL, 0x02000000 = FILE_FLAG_BACKUP_SEMANTICS,
+        // 0x00200000 = FILE_FLAG_OPEN_REPARSE_POINT. Without FILE_SHARE_DELETE a held directory cannot be renamed or removed. FILE_SHARE_WRITE
+        // decides whether files inside may still be renamed (the server does so in its data directory: ALTER SYSTEM, current_logfiles) —
+        // granted only for the data directory; without it nobody can open a held directory for writing (and turn it into a junction).
+        uint access = (holdAgainstRename ? 0x81u : 0x80u) | (readSecurity ? 0x00020000u : 0u);
+        uint share = holdAgainstRename ? (shareWrite ? 0x03u : 0x01u) : 0x07u;
+        uint flags = holdAgainstRename ? 0x02200000u : 0x02000000u;
+        SafeFileHandle h = CreateFileW(path, access, share, IntPtr.Zero, 3u, flags, IntPtr.Zero);
+        if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        if (holdAgainstRename) {
+          BY_HANDLE_FILE_INFORMATION info;
+          if (!GetFileInformationByHandle(h, out info)) {
+            int err = Marshal.GetLastWin32Error();
+            h.Dispose();
+            throw new Win32Exception(err);
+          }
+          // 0x10 = FILE_ATTRIBUTE_DIRECTORY, 0x400 = FILE_ATTRIBUTE_REPARSE_POINT
+          if ((info.FileAttributes & 0x10u) == 0 || (info.FileAttributes & 0x400u) != 0) {
+            h.Dispose();
+            throw new InvalidOperationException("Verzeichnis ist eine Umleitung (Junction/Link) oder kein reguläres Verzeichnis.");
+          }
+        }
+        return h;
+      }
+
+      /** Whether the object behind a held handle is (no longer) a plain directory: set in place, a junction shows up here. */
+      public static bool Redirected(SafeFileHandle h) {
+        BY_HANDLE_FILE_INFORMATION info;
+        if (!GetFileInformationByHandle(h, out info)) return true;
+        return (info.FileAttributes & 0x10u) == 0 || (info.FileAttributes & 0x400u) != 0;
+      }
+
+      public static string FinalPath(SafeFileHandle h) {
+        StringBuilder sb = new StringBuilder(1024);
+        uint len = GetFinalPathNameByHandleW(h, sb, (uint)sb.Capacity, 0u);
+        if (len >= sb.Capacity) {
+          sb = new StringBuilder((int)len + 1);
+          len = GetFinalPathNameByHandleW(h, sb, (uint)sb.Capacity, 0u);
+        }
+        if (len == 0) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return sb.ToString();
+      }
+
+      public static FileSecurity Security(SafeFileHandle h) {
+        IntPtr owner, grp, dacl, sacl, sd;
+        // SE_FILE_OBJECT = 1, OWNER_SECURITY_INFORMATION (1) | DACL_SECURITY_INFORMATION (4) = 5
+        uint err = GetSecurityInfo(h, 1, 5u, out owner, out grp, out dacl, out sacl, out sd);
+        if (err != 0) throw new Win32Exception((int)err);
+        try {
+          int len = (int)GetSecurityDescriptorLength(sd);
+          byte[] bin = new byte[len];
+          Marshal.Copy(sd, bin, 0, len);
+          FileSecurity fs = new FileSecurity();
+          fs.SetSecurityDescriptorBinaryForm(bin);
+          return fs;
+        } finally {
+          LocalFree(sd);
+        }
+      }
+    }
+    '
+    function Read-HandleAcl([string]$path) {
+      $h = [WinHandle]::Open($path, $true, $false, $false)
+      try {
+        $final = [WinHandle]::FinalPath($h)
+        $acl = [WinHandle]::Security($h)
+        $ownerSid = ''
+        try { $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value } catch {}
+        $aces = @()
+        foreach ($a in $acl.GetAccessRules($true, $true, [Security.Principal.NTAccount])) {
+          $sid = ''
+          try { $sid = $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+          $aces += @{ sid = $sid; name = [string]$a.IdentityReference.Value; rights = [string]$a.FileSystemRights; type = [string]$a.AccessControlType; inherited = [bool]$a.IsInherited }
+        }
+        return @{ path = $path; final = $final; owner = $ownerSid; aces = $aces }
+      } finally {
+        $h.Dispose()
+      }
+    }
+    PS;
+
   /**
    * Runs a PowerShell script (Windows PowerShell 5.1 is always present). The script reads its input as $d
    * (JSON, handed over base64-coded, never interpolated) and must print one JSON document.
@@ -527,12 +647,427 @@ final class Platform
   }
 }
 
+/**
+ * Windows write guard for apply and rollback: holds an open handle without FILE_SHARE_DELETE on every target directory and its
+ * ancestor up to the server's root (data directory or the directory of postgresql.conf), and checks that each handle's final path
+ * (GetFinalPathNameByHandle) is the expected direct path without a junction in between. While a directory is held this way, Windows
+ * refuses to rename or delete it, so nobody can swap it for a junction between check and write. Fail-closed on Windows if the
+ * helper cannot start or any path does not match; no-op on Unix (where Fs::asOwnerOf switches identity instead).
+ */
+final class WindowsPin
+{
+  /** @var resource|null */
+  private static $proc = null;
+  /** @var resource|null */
+  private static $stdin = null;
+  private static ?string $outFile = null;
+  private static ?string $errFile = null;
+  private static int $outOffset = 0;
+  /** @var array<string, string> normalized literal directory path => normalized final path of its held handle */
+  private static array $pinned = [];
+  /** @var array<string, string> normalized literal root directory => normalized final path */
+  private static array $roots = [];
+
+  public static function plain(string $p): string
+  {
+    return strtolower(rtrim(preg_replace('/^\\\\\\\\\?\\\\/', '', str_replace('/', '\\', $p)), '\\'));
+  }
+
+  /**
+   * Pins $roots (existing directories) and every existing target directory below them for the duration of the file phase.
+   * Each target directory must lie inside one of $roots, and every directory on the way from that root down to the existing
+   * ancestor of each target is opened without FILE_SHARE_DELETE and verified by its final path. The first root is the server's data
+   * directory: only there the server renames files itself (ALTER SYSTEM, current_logfiles), so only it keeps FILE_SHARE_WRITE; every
+   * other held directory is held without it, which also keeps it from being turned into a junction in place.
+   *
+   * @param string[] $roots the data directory first, then the directory of postgresql.conf
+   * @param string[] $targets file or directory paths that apply/rollback will read, write, create or remove
+   */
+  public static function begin(array $roots, array $targets): void
+  {
+    if (!Platform::windows()) {
+      return;
+    }
+    $rootMap = [];
+    foreach ($roots as $r) {
+      if ($r !== '') {
+        $rootMap[self::plain($r)] = $r;
+      }
+    }
+    if ($rootMap === []) {
+      self::end();
+      throw new HardenException('Kein Wurzelverzeichnis für die Windows-Schreibsperre angegeben — nichts geändert.');
+    }
+    // Keep already held handles open when begin() extends the target list for the same roots (Applier::applyFiles).
+    if (self::$proc !== null && array_keys(self::$roots) !== array_keys($rootMap)) {
+      self::end();
+    }
+    $toPin = $rootMap;
+    $chainChecks = [];
+    foreach ($targets as $target) {
+      $lit = self::plain($target);
+      $matchedRoot = null;
+      foreach ($rootMap as $rPlain => $rOrig) {
+        if ($lit === $rPlain || str_starts_with($lit, $rPlain . '\\')) {
+          $matchedRoot = $rPlain;
+          break;
+        }
+      }
+      if ($matchedRoot === null) {
+        self::end();
+        throw new HardenException('Ziel ' . Text::printable($target) . ' liegt außerhalb der geschützten Serververzeichnisse — nichts geändert.');
+      }
+      $rel = substr($lit, strlen($matchedRoot));
+      $parts = array_values(array_filter(explode('\\', $rel), fn($s) => $s !== '' && $s !== '.'));
+      if (in_array('..', $parts, true)) {
+        self::end();
+        throw new HardenException('Pfad mit „..“ wird nicht beschrieben: ' . Text::printable($target) . ' — nichts geändert.');
+      }
+      // Walk from the root down to the parent of $target (or $target itself when it is an existing directory).
+      $cur = $rootMap[$matchedRoot];
+      $curPlain = $matchedRoot;
+      $chainChecks[] = [$curPlain, $matchedRoot, []];
+      $walked = [];
+      $dirParts = Fs::attempt(fn() => is_dir($target)) === true ? $parts : array_slice($parts, 0, -1);
+      foreach ($dirParts as $part) {
+        $cur = rtrim($cur, '\\/') . '\\' . $part;
+        $curPlain .= '\\' . $part;
+        $walked[] = $part;
+        if (Fs::attempt(fn() => is_dir($cur)) === true || !Fs::definitelyAbsent($cur)) {
+          $toPin[$curPlain] = $cur;
+          $chainChecks[] = [$curPlain, $matchedRoot, $walked];
+        }
+      }
+    }
+    try {
+      self::pinDirs(array_values($toPin), array_key_first($rootMap));
+      foreach ($rootMap as $rPlain => $rOrig) {
+        $final = self::$pinned[$rPlain] ?? null;
+        if ($final === null || $final !== $rPlain) {
+          throw new HardenException('Serververzeichnis ' . Text::printable($rOrig) . ' führt über eine Umleitung (Junction/Link) oder lässt sich nicht festhalten — nichts geändert.');
+        }
+        self::$roots[$rPlain] = $final;
+      }
+      foreach ($chainChecks as [$dirPlain, $rPlain, $walked]) {
+        $final = self::$pinned[$dirPlain] ?? null;
+        $want = $walked === [] ? self::$roots[$rPlain] : self::$roots[$rPlain] . '\\' . implode('\\', $walked);
+        if ($final === null || $final !== $want) {
+          throw new HardenException('Verzeichnis ' . Text::printable($dirPlain) . ' führt über eine Umleitung (Junction/Link) oder lässt sich nicht festhalten — nichts geändert.');
+        }
+      }
+    } catch (Throwable $e) {
+      self::end();
+      throw $e;
+    }
+  }
+
+  /**
+   * Verifies right before a write/create/mkdir/restore/backup on Windows that $path (or its parent directory when $path is
+   * being created) is held by the active pin of begin(), that the helper still runs, that every held directory is still a plain
+   * directory under its final path (checked on the handles, see verifyHeld) and that an existing target is not redirected through
+   * a junction or symbolic link. Without an active pin nothing is written (fail-closed).
+   *
+   * @return callable(): void to call after the operation: checks the held directories once more
+   */
+  public static function verifyTarget(string $path, bool $mustExist = false): callable
+  {
+    if (!Platform::windows()) {
+      return static function (): void {};
+    }
+    if (!self::running()) {
+      self::end();
+      throw new HardenException('Windows-Schreibsperre ist nicht aktiv — ' . Text::printable($path) . ' wird nicht geschrieben, nichts geändert.');
+    }
+    $lit = self::plain($path);
+    if (in_array('..', explode('\\', $lit), true)) {
+      throw new HardenException('Pfad mit „..“ wird nicht verwendet: ' . Text::printable($path) . ' — nichts geändert.');
+    }
+    $dirPlain = dirname($lit);
+    // For a path that is itself a pinned directory (e.g. rmdir of conf.d or backup check), its parent must be pinned;
+    // for a file inside a directory, that directory itself must be pinned.
+    if (!isset(self::$pinned[$dirPlain]) && !isset(self::$pinned[$lit])) {
+      throw new HardenException('Zielverzeichnis für ' . Text::printable($path) . ' ist nicht durch ein offenes Handle gesichert — nichts geändert.');
+    }
+    $basePlain = isset(self::$pinned[$dirPlain]) ? $dirPlain : $lit;
+    $baseFinal = self::$pinned[$basePlain];
+    self::verifyHeld();
+    // And by path: the way to the directory still resolves to the pinned handle's final path.
+    $liveBase = Fs::attempt(fn() => readlink($basePlain));
+    if (!is_string($liveBase) || self::plain($liveBase) !== $baseFinal) {
+      throw new HardenException('Zielverzeichnis ' . Text::printable($basePlain) . ' zeigt nicht auf den erwarteten Pfad (Umleitung/Junction) — nichts geändert.');
+    }
+    $exists = Fs::attempt(fn() => file_exists($path)) === true || Fs::attempt(fn() => is_link($path)) === true;
+    $present = $exists || !Fs::definitelyAbsent($path);
+    if ($mustExist && !$exists) {
+      throw new HardenException('Datei ' . Text::printable($path) . ' fehlt oder ist nicht prüfbar — nichts geändert.');
+    }
+    if ($present && $lit !== $basePlain) {
+      $liveTarget = Fs::attempt(fn() => readlink($path));
+      $wantTarget = $baseFinal . '\\' . basename($lit);
+      if (!is_string($liveTarget) || self::plain($liveTarget) !== $wantTarget) {
+        throw new HardenException(Text::printable($path) . ' führt über eine Umleitung (Junction/symbolischer Link) — nichts geändert.');
+      }
+    }
+    // Afterwards the same check on the handles: a directory changed while the operation ran makes it fail, and the caller restores.
+    return static fn() => self::verifyHeld();
+  }
+
+  /**
+   * Every held directory is still a plain directory (no reparse point set in place) and still has the final path it had when it was
+   * pinned — decided on the open handles by the helper, not on paths. Throws (and releases everything) otherwise.
+   */
+  private static function verifyHeld(): void
+  {
+    $json = self::command(['op' => 'check']);
+    $seen = [];
+    foreach ($json['dirs'] ?? [] as $entry) {
+      $key = self::plain((string) ($entry['path'] ?? ''));
+      $seen[$key] = true;
+      if (($entry['redirected'] ?? true) !== false || !isset(self::$pinned[$key]) || self::plain((string) ($entry['final'] ?? '')) !== self::$pinned[$key]) {
+        self::end();
+        throw new HardenException('Festgehaltenes Verzeichnis ' . Text::printable($key) . ' ist inzwischen umgeleitet oder verändert — abgebrochen.');
+      }
+    }
+    if (array_diff_key(self::$pinned, $seen) !== []) {
+      self::end();
+      throw new HardenException('Windows-Schreibsperre hält nicht mehr alle Verzeichnisse — abgebrochen.');
+    }
+  }
+
+  private static function running(): bool
+  {
+    return is_resource(self::$proc) && proc_get_status(self::$proc)['running'];
+  }
+
+  /** Adds a newly created directory (such as conf.d) to the active pin without releasing existing handles, and verifies its final path. */
+  public static function pinCreatedDir(string $dir): void
+  {
+    if (!Platform::windows()) {
+      return;
+    }
+    if (!self::running()) {
+      self::end();
+      throw new HardenException('Windows-Schreibsperre ist nicht aktiv — ' . Text::printable($dir) . ' lässt sich nicht festhalten.');
+    }
+    $lit = self::plain($dir);
+    $parent = dirname($lit);
+    $parentFinal = self::$pinned[$parent] ?? null;
+    if ($parentFinal === null) {
+      throw new HardenException('Elternverzeichnis von ' . Text::printable($dir) . ' ist nicht gesichert — nichts geändert.');
+    }
+    self::pinDirs([$dir]);
+    if ((self::$pinned[$parent] ?? null) !== $parentFinal || (self::$pinned[$lit] ?? null) !== $parentFinal . '\\' . basename($lit)) {
+      self::end();
+      throw new HardenException('Neu angelegtes Verzeichnis ' . Text::printable($dir) . ' hat nicht den erwarteten Zielpfad — nichts geändert.');
+    }
+  }
+
+  /** Releases a directory handle right before rmdir (in restore/rollback) while keeping its parent pinned. */
+  public static function unpinDirForRemove(string $dir): void
+  {
+    if (!Platform::windows()) {
+      return;
+    }
+    if (!self::running()) {
+      self::end();
+      throw new HardenException('Windows-Schreibsperre ist nicht aktiv — ' . Text::printable($dir) . ' wird nicht entfernt.');
+    }
+    $lit = self::plain($dir);
+    if (!isset(self::$pinned[$lit])) {
+      return;
+    }
+    $parent = dirname($lit);
+    if (!isset(self::$pinned[$parent])) {
+      throw new HardenException('Elternverzeichnis von ' . Text::printable($dir) . ' ist nicht gesichert — nichts entfernt.');
+    }
+    $live = Fs::attempt(fn() => readlink($dir));
+    if (!is_string($live) || self::plain($live) !== self::$pinned[$lit]) {
+      throw new HardenException('Verzeichnis ' . Text::printable($dir) . ' führt über eine Umleitung — wird nicht entfernt.');
+    }
+    self::command(['op' => 'unpin', 'dir' => $lit]);
+    unset(self::$pinned[$lit]);
+  }
+
+  public static function end(): void
+  {
+    self::$pinned = [];
+    self::$roots = [];
+    self::$outOffset = 0;
+    if (is_resource(self::$stdin)) {
+      Fs::attempt(fn() => fclose(self::$stdin));
+    }
+    self::$stdin = null;
+    if (is_resource(self::$proc)) {
+      // A helper stuck in a call must not block the run (and with it a restore): ended first, then closed.
+      if (proc_get_status(self::$proc)['running']) {
+        Fs::attempt(fn() => proc_terminate(self::$proc, 9));
+      }
+      Fs::attempt(fn() => proc_close(self::$proc));
+    }
+    self::$proc = null;
+    if (self::$outFile !== null) {
+      Fs::attempt(fn() => unlink(self::$outFile));
+      self::$outFile = null;
+    }
+    if (self::$errFile !== null) {
+      Fs::attempt(fn() => unlink(self::$errFile));
+      self::$errFile = null;
+    }
+  }
+
+  /**
+   * @param string[] $dirs
+   * @param ?string $shared normalized data directory: the only one held with FILE_SHARE_WRITE (the server renames files there)
+   */
+  private static function pinDirs(array $dirs, ?string $shared = null): void
+  {
+    self::ensureRunning();
+    $map = [];
+    foreach ($dirs as $d) {
+      $map[self::plain($d)] = ['path' => $d, 'share_write' => $shared !== null && self::plain($d) === $shared];
+    }
+    $json = self::command(['op' => 'pin', 'dirs' => array_values($map)]);
+    foreach ($json['dirs'] ?? [] as $entry) {
+      self::$pinned[self::plain((string) $entry['path'])] = self::plain((string) $entry['final']);
+    }
+  }
+
+  private static function ensureRunning(): void
+  {
+    if (self::running()) {
+      return;
+    }
+    self::end();
+    $out = Fs::attempt(fn() => tempnam(sys_get_temp_dir(), 'pgh'));
+    $err = Fs::attempt(fn() => tempnam(sys_get_temp_dir(), 'pgh'));
+    if ($out === null || $err === null) {
+      throw new HardenException('Temporäre Datei für die Windows-Schreibsperre lässt sich nicht anlegen — nichts geändert.');
+    }
+    self::$outFile = $out;
+    self::$errFile = $err;
+    $ps = "\$ErrorActionPreference = 'Stop'\n[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding(\$false)\n"
+      . Platform::WIN_HANDLE_PS . "\n" . <<<'PS'
+      $handles = @{}
+      # The path as PHP sent it, per handle: 'check' answers with it, so PHP finds its own key again (strtolower there lowers ASCII only).
+      $paths = @{}
+      try {
+        while (($line = [Console]::In.ReadLine()) -ne $null) {
+          $cmd = $null
+          try {
+            $cmd = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($line)))
+            # Same key as WindowsPin::plain on the PHP side: forward slashes, trailing separators, case and a leading \\?\ are spelling.
+            $key = { param([string]$p) ($p.Replace('/', '\') -replace '^\\\\\?\\', '').TrimEnd('\').ToLowerInvariant() }
+            if ($cmd.op -eq 'pin') {
+              $outDirs = @()
+              foreach ($entry in @($cmd.dirs)) {
+                $p = [string]$entry.path
+                $k = & $key $p
+                if (-not $handles.ContainsKey($k)) {
+                  $handles[$k] = [WinHandle]::Open($p, $false, $true, [bool]$entry.share_write)
+                  $paths[$k] = $p
+                }
+                $outDirs += @{ path = $p; final = [WinHandle]::FinalPath($handles[$k]) }
+              }
+              $res = @{ ok = $true; dirs = $outDirs }
+            } elseif ($cmd.op -eq 'check') {
+              # Every held directory must still be a plain directory under its final path: decided on the handles, not on paths.
+              $outDirs = @()
+              foreach ($k in @($handles.Keys)) {
+                $outDirs += @{ path = $paths[$k]; final = [WinHandle]::FinalPath($handles[$k]); redirected = [WinHandle]::Redirected($handles[$k]) }
+              }
+              $res = @{ ok = $true; dirs = $outDirs }
+            } elseif ($cmd.op -eq 'unpin') {
+              $k = & $key ([string]$cmd.dir)
+              if ($handles.ContainsKey($k)) {
+                $handles[$k].Dispose()
+                $handles.Remove($k)
+                $paths.Remove($k)
+              }
+              $res = @{ ok = $true }
+            } else {
+              $res = @{ ok = $false; error = 'Unbekannter Befehl' }
+            }
+          } catch {
+            $err = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+            $res = @{ ok = $false; error = [string]$err }
+          }
+          # The answer names its request: after an interrupted command the next one must not take the stale answer for its own.
+          $res.id = if ($cmd -and $cmd.id) { [string]$cmd.id } else { '' }
+          [Console]::Out.WriteLine((ConvertTo-Json -InputObject $res -Depth 4 -Compress))
+          [Console]::Out.Flush()
+        }
+      } finally {
+        foreach ($h in $handles.Values) { $h.Dispose() }
+      }
+      PS;
+    $encoded = base64_encode(mb_convert_encoding($ps, 'UTF-16LE', 'UTF-8'));
+    $pipes = [];
+    $env = array_filter(getenv(), fn($k) => !str_starts_with(strtoupper((string) $k), 'PG'), ARRAY_FILTER_USE_KEY);
+    try {
+      $proc = proc_open(
+        [Platform::systemTool('powershell.exe'), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded],
+        [0 => ['pipe', 'r'], 1 => ['file', $out, 'w'], 2 => ['file', $err, 'w']],
+        $pipes,
+        null,
+        $env,
+        // Own process group: Ctrl+C in the console reaches PHP (Guard restores the backups), not the helper that holds the directories.
+        ['bypass_shell' => true, 'create_process_group' => true],
+      );
+    } catch (ErrorException) {
+      $proc = false;
+    }
+    if (!is_resource($proc)) {
+      self::end();
+      throw new HardenException('Windows-Schreibsperre (PowerShell) ließ sich nicht starten — nichts geändert.');
+    }
+    self::$proc = $proc;
+    self::$stdin = $pipes[0];
+  }
+
+  private static function command(array $payload): array
+  {
+    $payload['id'] = $id = bin2hex(random_bytes(8));
+    $b64 = base64_encode(json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+    $written = self::running() && is_resource(self::$stdin)
+      && Fs::attempt(fn() => fwrite(self::$stdin, $b64 . "\n")) === strlen($b64) + 1
+      && Fs::attempt(fn() => fflush(self::$stdin)) === true;
+    if (!$written || self::$outFile === null) {
+      self::end();
+      throw new HardenException('Windows-Schreibsperre ist nicht erreichbar — nichts geändert.');
+    }
+    $deadline = microtime(true) + 30;
+    $json = null;
+    while ($json === null && microtime(true) < $deadline) {
+      $chunk = Fs::attempt(fn() => file_get_contents(self::$outFile, false, null, self::$outOffset));
+      if (is_string($chunk) && ($nl = strpos($chunk, "\n")) !== false) {
+        self::$outOffset += $nl + 1;
+        $answer = json_decode(ltrim(rtrim(substr($chunk, 0, $nl), "\r"), "\xEF\xBB\xBF"), true);
+        // An answer to an earlier, interrupted request is skipped; only the one naming this request counts.
+        if (!is_array($answer) || ($answer['id'] ?? null) === $id) {
+          $json = is_array($answer) ? $answer : false;
+        }
+        continue;
+      }
+      if (!self::running()) {
+        break;
+      }
+      usleep(15000);
+    }
+    if (!is_array($json) || ($json['ok'] ?? false) !== true || !self::running()) {
+      $msg = is_array($json) && isset($json['error']) ? (string) $json['error'] : 'Helfer antwortet nicht';
+      self::end();
+      throw new HardenException('Zielverzeichnis lässt sich nicht gegen Umbenennen sperren (' . Text::printable($msg) . ') — nichts geändert.');
+    }
+    return $json;
+  }
+}
+
 /** Proof that the instance we are connected to runs on this machine, plus the settings the probes need. */
 final class LocalServer
 {
   public const SETTINGS = [
     'data_directory', 'config_file', 'hba_file', 'ident_file', 'port', 'unix_socket_directories', 'unix_socket_permissions',
-    'ssl', 'ssl_key_file', 'ssl_cert_file', 'logging_collector', 'log_directory', 'archive_mode',
+    'ssl', 'ssl_key_file', 'ssl_cert_file', 'ssl_ca_file', 'logging_collector', 'log_directory', 'archive_mode',
   ];
 
   public const UNPROVEN = 'die Prozessnummer aus postmaster.pid passt nicht zum Elternprozess der eigenen Verbindung, zum Besitzer des Datenverzeichnisses oder zur Startzeit des Servers (/proc)';
@@ -541,12 +1076,21 @@ final class LocalServer
    * $pid comes from postmaster.pid, a file of the service account: on Linux it counts only when proven() confirms it from /proc
    * (written by the kernel), otherwise it is null — the process probes would read another process as root. On Windows
    * WindowsFacts proves the same relation before it uses the process.
+   *
+   * @param string[] $extraConfigFiles
+   * @param string[] $hbaFiles
+   * @param array<string, string> $tablespaces
+   * @param array<string, string[]> $gaps what the server did not reveal (no rights): probe => reasons, reported as "nicht geprüft"
    */
   private function __construct(
     public readonly ?int $pid,
     public readonly int $backendPid,
     public readonly string $dataDir,
     public readonly array $settings,
+    public readonly array $extraConfigFiles = [],
+    public readonly array $hbaFiles = [],
+    public readonly array $tablespaces = [],
+    public readonly array $gaps = [],
   ) {}
 
   /** Setting as a path; relative values count from the data directory, as PostgreSQL itself resolves them. */
@@ -581,8 +1125,9 @@ final class LocalServer
       }
       return [null, 'Das Datenverzeichnis ist von hier aus nicht sichtbar (fehlende Rechte?) — als Dienstkonto bzw. mit Administrator-/root-Rechten ausführen', true];
     }
-    // Read with the service account's identity (its directory): a link or FIFO it placed there reaches only what it may read itself.
-    $content = Fs::readGuarded($dir . '/postmaster.pid', 4096);
+    // Read with the service account's identity (its directory): a link or FIFO it placed there reaches only what it may read itself;
+    // on Windows (no identity switch) Fs::readGuarded refuses a way through a junction inside the data directory.
+    $content = Fs::readGuarded($dir . '/postmaster.pid', 4096, Platform::windows() ? $dir : null);
     if ($content === null) {
       return [null, 'postmaster.pid nicht lesbar — als Dienstkonto bzw. mit Administrator-/root-Rechten ausführen, um die Zugehörigkeit zu prüfen', true];
     }
@@ -596,12 +1141,48 @@ final class LocalServer
     }
     $pid = (int) $lines[0];
     $backend = (int) $own['backend'];
+    $extraFiles = [];
+    $hbaFiles = [];
+    // pg_file_settings and pg_hba_file_rules need a superuser or pg_read_all_settings: without them included files stay unknown,
+    // which the probes report as "nicht geprüft" instead of passing in silence.
+    $gaps = [];
+    try {
+      foreach (Connector::readOnly($pdo, 'SELECT DISTINCT sourcefile AS f FROM pg_file_settings WHERE sourcefile IS NOT NULL AND sourcefile <> \'\'') as $row) {
+        $f = (string) $row['f'];
+        $extraFiles[] = Fs::isAbsolute($f) ? $f : $dir . '/' . $f;
+      }
+    } catch (Throwable) {
+      $gaps['config'][] = 'eingebundene Konfigurationsdateien (pg_file_settings nicht lesbar)';
+    }
+    try {
+      foreach (Connector::readOnly($pdo, 'SELECT DISTINCT to_jsonb(r) ->> \'file_name\' AS f FROM pg_hba_file_rules r WHERE to_jsonb(r) ->> \'file_name\' IS NOT NULL AND to_jsonb(r) ->> \'file_name\' <> \'\'') as $row) {
+        $f = (string) $row['f'];
+        $abs = Fs::isAbsolute($f) ? $f : $dir . '/' . $f;
+        $extraFiles[] = $abs;
+        $hbaFiles[] = $abs;
+      }
+    } catch (Throwable) {
+      $gaps['config'][] = 'eingebundene HBA-Dateien (pg_hba_file_rules nicht lesbar)';
+    }
+    $tablespaces = [];
+    try {
+      foreach (Connector::readOnly($pdo, 'SELECT spcname, pg_tablespace_location(oid) AS loc FROM pg_tablespace WHERE spcname NOT IN (\'pg_default\', \'pg_global\')') as $row) {
+        $loc = (string) ($row['loc'] ?? '');
+        if ($loc !== '') {
+          $tablespaces[(string) $row['spcname']] = Fs::isAbsolute($loc) ? $loc : $dir . '/' . $loc;
+        }
+      }
+    } catch (Throwable) {
+      $gaps['tablespaces'][] = 'Tablespaces (pg_tablespace nicht lesbar)';
+    }
+    $extraFiles = array_values(array_unique($extraFiles));
+    $hbaFiles = array_values(array_unique($hbaFiles));
     if (Platform::windows()) {
-      return [new self($pid, $backend, $dir, $settings), 'lokal (Prozess ' . $pid . ', Nachweis über die Prozessliste)', false];
+      return [new self($pid, $backend, $dir, $settings, $extraFiles, $hbaFiles, $tablespaces, $gaps), 'lokal (Prozess ' . $pid . ', Nachweis über die Prozessliste)', false];
     }
     return self::proven($pid, $backend, $dir, $start)
-      ? [new self($pid, $backend, $dir, $settings), 'lokal (Prozess ' . $pid . ')', false]
-      : [new self(null, $backend, $dir, $settings), 'lokal (Serverprozess nicht nachgewiesen — ' . self::UNPROVEN . ')', false];
+      ? [new self($pid, $backend, $dir, $settings, $extraFiles, $hbaFiles, $tablespaces, $gaps), 'lokal (Prozess ' . $pid . ')', false]
+      : [new self(null, $backend, $dir, $settings, $extraFiles, $hbaFiles, $tablespaces, $gaps), 'lokal (Serverprozess nicht nachgewiesen — ' . self::UNPROVEN . ')', false];
   }
 
   /**
@@ -637,22 +1218,25 @@ final class LocalServer
   }
 }
 
-/** Facts that only Windows PowerShell can read; fetched once per run. */
+/** Facts that only Windows PowerShell can read; fetched once per run. ACLs are read from an open handle (GetSecurityInfo), never by path. */
 final class WindowsFacts
 {
   private static ?array $cache = null;
+  private static ?string $cacheKey = null;
 
   public static function get(LocalServer $s): array
   {
-    if (self::$cache !== null) {
-      return self::$cache;
-    }
-    $paths = array_values(array_unique(array_filter([
+    $paths = array_values(array_unique(array_filter(array_merge([
       $s->dataDir, $s->path('config_file'), $s->path('hba_file'), $s->path('ident_file'), $s->dataDir . '/postgresql.auto.conf',
       $s->setting('ssl') === 'on' ? $s->path('ssl_key_file') : null,
       $s->setting('logging_collector') === 'on' ? $s->path('log_directory') : null,
-    ])));
-    $script = <<<'PS'
+    ], $s->extraConfigFiles, array_values($s->tablespaces)))));
+    $key = $s->dataDir . "\0" . implode("\0", $paths);
+    if (self::$cache !== null && self::$cacheKey === $key) {
+      return self::$cache;
+    }
+    self::$cacheKey = $key;
+    $script = Platform::WIN_HANDLE_PS . "\n" . <<<'PS'
       $res = @{ service = $null; signature = $null; acls = @() }
       try {
         # The process number comes from postmaster.pid (a file of the service account): it counts only as the parent of our own backend.
@@ -672,7 +1256,42 @@ final class WindowsFacts
         $exe = $null
         if ($p -and $p.ExecutablePath) { $exe = $p.ExecutablePath }
         elseif ($svc -and $svc.PathName -match '^"([^"]+)"') { $exe = $Matches[1] }
-        $res.service = @{ name = if ($svc) { [string]$svc.Name } else { $null }; account = if ($svc) { [string]$svc.StartName } else { $null }; exe = $exe }
+        $unquoted = $false
+        $envSecrets = @()
+        $regAces = @()
+        if ($svc) {
+          $pn = [string]$svc.PathName
+          if ($pn -notmatch '^\s*"' -and $pn -match '^\s*([A-Za-z]:\\[^"]*?\.exe)\b' -and $Matches[1] -match '\s') {
+            $unquoted = $true
+          }
+          $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\' + [string]$svc.Name
+          try {
+            $item = Get-ItemProperty -LiteralPath $regPath -Name Environment -ErrorAction SilentlyContinue
+            if ($item -and $item.Environment) {
+              foreach ($ev in @($item.Environment)) {
+                if ([string]$ev -match '^\s*(PGPASSWORD|PGPASSFILE_CONTENT|\w*PASSWORD\w*|\w*PASSWD\w*|\w*SECRET\w*)\s*=') {
+                  $envSecrets += [string]$Matches[1]
+                }
+              }
+            }
+          } catch {}
+          try {
+            $racl = Get-Acl -LiteralPath $regPath -ErrorAction Stop
+            foreach ($a in $racl.Access) {
+              $sid = try { $a.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { '' }
+              $regAces += @{ sid = $sid; rights = [string]$a.RegistryRights; type = [string]$a.AccessControlType }
+            }
+          } catch {}
+        }
+        $res.service = @{
+          name = if ($svc) { [string]$svc.Name } else { $null }
+          account = if ($svc) { [string]$svc.StartName } else { $null }
+          exe = $exe
+          pathName = if ($svc) { [string]$svc.PathName } else { $null }
+          unquotedPath = $unquoted
+          envSecrets = @($envSecrets)
+          regAces = @($regAces)
+        }
         if ($exe) {
           $sig = Get-AuthenticodeSignature -LiteralPath $exe
           $res.signature = @{ status = [string]$sig.Status; subject = if ($sig.SignerCertificate) { [string]$sig.SignerCertificate.Subject } else { $null } }
@@ -680,14 +1299,7 @@ final class WindowsFacts
       } catch { $res.service = @{ error = $_.Exception.Message } }
       foreach ($path in @($d.paths)) {
         try {
-          $acl = Get-Acl -LiteralPath $path
-          $aces = @()
-          foreach ($a in $acl.Access) {
-            $sid = ''
-            try { $sid = $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-            $aces += @{ sid = $sid; name = [string]$a.IdentityReference.Value; rights = [string]$a.FileSystemRights; type = [string]$a.AccessControlType; inherited = [bool]$a.IsInherited }
-          }
-          $res.acls += @{ path = $path; aces = $aces }
+          $res.acls += (Read-HandleAcl ([string]$path))
         } catch { $res.acls += @{ path = $path; error = $_.Exception.Message } }
       }
       ConvertTo-Json -InputObject $res -Depth 6 -Compress
@@ -696,58 +1308,87 @@ final class WindowsFacts
   }
 
   /**
-   * Owner and every principal with an Allow entry on one path; null if the ACL cannot be read.
+   * Owner and every principal with an Allow entry on one path, read from an open handle whose final path matches $path
+   * (or $base below it); null if the ACL cannot be read or the handle leads elsewhere through a junction or link.
    * Unresolvable SIDs come back as '' so that the caller can refuse them.
    *
    * @return ?array{owner: string, sids: string[]}
    */
-  public static function strictAcl(string $path): ?array
+  public static function strictAcl(string $path, ?string $base = null): ?array
   {
-    $res = Platform::powershell(<<<'PS'
+    $res = Platform::powershell(Platform::WIN_HANDLE_PS . "\n" . <<<'PS'
       try {
-        $acl = Get-Acl -LiteralPath $d.path
-        $owner = ''
-        try { $owner = (New-Object Security.Principal.NTAccount($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
+        $info = Read-HandleAcl ([string]$d.path)
         $sids = @()
-        foreach ($a in $acl.Access) {
-          if ([string]$a.AccessControlType -eq 'Allow') {
-            $sid = ''
-            try { $sid = $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-            $sids += $sid
+        foreach ($a in $info.aces) {
+          if ([string]$a.type -eq 'Allow') {
+            $sids += [string]$a.sid
           }
         }
-        ConvertTo-Json -InputObject @{ ok = $true; owner = $owner; sids = @($sids) } -Compress
+        ConvertTo-Json -InputObject @{ ok = $true; final = [string]$info.final; owner = [string]$info.owner; sids = @($sids) } -Compress
       } catch { ConvertTo-Json -InputObject @{ ok = $false } -Compress }
       PS, ['path' => $path]);
-    return ($res['ok'] ?? false) === true ? ['owner' => (string) ($res['owner'] ?? ''), 'sids' => array_map('strval', (array) ($res['sids'] ?? []))] : null;
+    if (($res['ok'] ?? false) !== true || !is_string($res['final'] ?? null)) {
+      return null;
+    }
+    if (Fs::windowsRedirected($path, $base ?? dirname($path), $res['final'])) {
+      return null;
+    }
+    return ['owner' => (string) ($res['owner'] ?? ''), 'sids' => array_map('strval', (array) ($res['sids'] ?? []))];
   }
 
-  /** Allow-ACEs of one path for broad principals (Everyone, Users, …); null if the ACL cannot be read. @return ?string[] */
-  public static function broadAcesOf(string $path): ?array
+  /**
+   * Windows: true only if the opened handle is not redirected, its owner is the current account, SYSTEM or Administrators,
+   * and every Allow entry belongs to the current account, SYSTEM, Administrators or CREATOR OWNER.
+   */
+  public static function isStrictlyPrivate(string $path, ?string $base = null): bool
   {
-    $res = Platform::powershell(<<<'PS'
-      $out = @()
+    $acl = self::strictAcl($path, $base);
+    $me = Platform::currentSid();
+    $allowed = array_filter([$me, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-0']);
+    return $acl !== null && $me !== null
+      && in_array($acl['owner'], [$me, 'S-1-5-32-544', 'S-1-5-18'], true)
+      && array_filter($acl['sids'], fn($sid) => !in_array($sid, $allowed, true)) === [];
+  }
+
+  /**
+   * Allow-ACEs of one path for broad principals (Everyone, Users, …), read from an open handle whose final path matches $path
+   * (or $base below it); null if the ACL cannot be read or the handle leads elsewhere.
+   *
+   * @return ?string[]
+   */
+  public static function broadAcesOf(string $path, ?string $base = null): ?array
+  {
+    $res = Platform::powershell(Platform::WIN_HANDLE_PS . "\n" . <<<'PS'
       try {
-        foreach ($a in (Get-Acl -LiteralPath $d.path).Access) {
-          $sid = ''
-          try { $sid = $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-          $out += @{ sid = $sid; name = [string]$a.IdentityReference.Value; type = [string]$a.AccessControlType }
-        }
-        ConvertTo-Json -InputObject @{ ok = $true; aces = $out } -Depth 4 -Compress
+        $info = Read-HandleAcl ([string]$d.path)
+        ConvertTo-Json -InputObject @{ ok = $true; final = [string]$info.final; aces = $info.aces } -Depth 5 -Compress
       } catch { ConvertTo-Json -InputObject @{ ok = $false } -Compress }
       PS, ['path' => $path]);
-    if (($res['ok'] ?? false) !== true) {
+    if (($res['ok'] ?? false) !== true || !is_string($res['final'] ?? null)) {
+      return null;
+    }
+    if (Fs::windowsRedirected($path, $base ?? dirname($path), $res['final'])) {
       return null;
     }
     return OsProbes::broadNames($res['aces'] ?? []);
   }
 
-  /** @return ?array the ACEs of a path, null if not readable */
+  /** @return ?array the ACEs of a path (verified by the opened handle's final path against the data directory or its parent), null if not readable or redirected */
   public static function aces(LocalServer $s, string $path): ?array
   {
+    $normPath = strtolower(rtrim(str_replace('/', '\\', $path), '\\')) . '\\';
+    $normData = strtolower(rtrim(str_replace('/', '\\', $s->dataDir), '\\')) . '\\';
+    $base = str_starts_with($normPath, $normData) ? $s->dataDir : dirname($path);
     foreach (self::get($s)['acls'] ?? [] as $acl) {
       if (($acl['path'] ?? null) === $path) {
-        return isset($acl['error']) ? null : ($acl['aces'] ?? []);
+        if (isset($acl['error']) || !is_string($acl['final'] ?? null)) {
+          return null;
+        }
+        if (Fs::windowsRedirected($path, $base, $acl['final'])) {
+          return null;
+        }
+        return $acl['aces'] ?? [];
       }
     }
     return null;
@@ -757,8 +1398,8 @@ final class WindowsFacts
 final class OsProbes
 {
   public const NAMES = [
-    'pgdata_permissions', 'config_permissions', 'ssl_key_permissions', 'log_permissions', 'socket_permissions',
-    'umask', 'service_account', 'service_unit', 'log_own_volume', 'disk_free', 'package_source',
+    'pgdata_permissions', 'config_permissions', 'ssl_key_permissions', 'ssl_cert_expiry', 'tablespace_permissions',
+    'log_permissions', 'socket_permissions', 'umask', 'service_account', 'service_unit', 'log_own_volume', 'disk_free', 'package_source',
   ];
 
   /** Principals that must never appear in the ACL of server files (SIDs are locale-independent). */
@@ -789,6 +1430,8 @@ final class OsProbes
       'pgdata_permissions' => self::pgdata($s, $r),
       'config_permissions' => self::config($s, $r),
       'ssl_key_permissions' => self::sslKey($s, $r),
+      'ssl_cert_expiry' => self::sslCertExpiry($s, $r),
+      'tablespace_permissions' => self::tablespaces($s, $r),
       'log_permissions' => self::logs($s, $r),
       'socket_permissions' => self::sockets($s, $r),
       'umask' => self::umask($s, $r),
@@ -889,14 +1532,18 @@ final class OsProbes
 
   private static function config(LocalServer $s, array &$r): void
   {
-    $files = array_filter([$s->path('config_file'), $s->path('hba_file'), $s->path('ident_file'), $s->dataDir . '/postgresql.auto.conf']);
+    $files = array_filter(array_merge([$s->path('config_file'), $s->path('hba_file'), $s->path('ident_file'), $s->dataDir . '/postgresql.auto.conf'], $s->extraConfigFiles));
+    $hbaSet = array_map([Fs::class, 'canonical'], $s->hbaFiles);
+    foreach ($s->gaps['config'] ?? [] as $gap) {
+      $r['unchecked'][] = $gap . ' — mit Superuser-Rechten oder pg_read_all_settings erneut prüfen';
+    }
     foreach (array_unique($files) as $file) {
       if (Fs::attempt(fn() => file_exists($file)) !== true) {
         continue;
       }
-      // postgresql.conf and pg_ident.conf are world-readable on packaged installs by design; pg_hba.conf and
-      // postgresql.auto.conf (ALTER SYSTEM, may carry connection strings) are not.
-      $readIsProblem = in_array(basename($file), ['pg_hba.conf', 'postgresql.auto.conf'], true);
+      // postgresql.conf and pg_ident.conf are world-readable on packaged installs by design; pg_hba.conf (plus included
+      // HBA files) and postgresql.auto.conf (ALTER SYSTEM, may carry connection strings) are not.
+      $readIsProblem = in_array(basename($file), ['pg_hba.conf', 'postgresql.auto.conf'], true) || in_array(Fs::canonical($file), $hbaSet, true);
       if (Platform::windows()) {
         self::broadAces($s, $file, $r, writeOnly: !$readIsProblem);
         continue;
@@ -940,6 +1587,76 @@ final class OsProbes
     $limit = $st['uid'] === 0 ? 0037 : 0077;
     if (($mode & $limit) !== 0) {
       self::finding($r, $key, 'privater Schlüssel zu offen (Modus ' . self::mode($mode) . '; erlaubt 0600' . ($st['uid'] === 0 ? ' oder 0640' : '') . ')');
+    }
+  }
+
+  private static function sslCertExpiry(LocalServer $s, array &$r): void
+  {
+    $cert = $s->path('ssl_cert_file');
+    if ($s->setting('ssl') !== 'on' || $cert === null) {
+      $r['notes'][] = 'TLS ist nicht eingeschaltet — nichts zu prüfen';
+      return;
+    }
+    if (!function_exists('openssl_x509_parse')) {
+      $r['unchecked'][] = 'PHP-Erweiterung openssl fehlt — Ablaufdatum nicht prüfbar';
+      return;
+    }
+    $files = array_values(array_unique(array_filter([$cert, $s->path('ssl_ca_file')])));
+    foreach ($files as $file) {
+      if (Fs::attempt(fn() => file_exists($file)) !== true) {
+        $r['unchecked'][] = Text::printable($file) . ': nicht gefunden oder nicht lesbar';
+        continue;
+      }
+      $normFile = strtolower(rtrim(str_replace('/', '\\', $file), '\\')) . '\\';
+      $normData = strtolower(rtrim(str_replace('/', '\\', $s->dataDir), '\\')) . '\\';
+      $base = Platform::windows() ? (str_starts_with($normFile, $normData) ? $s->dataDir : dirname($file)) : null;
+      $pem = Fs::readGuarded($file, 1048576, $base);
+      $info = $pem === null ? null : Fs::attempt(fn() => openssl_x509_parse($pem));
+      if (!is_array($info) || !isset($info['validTo_time_t'])) {
+        $r['unchecked'][] = Text::printable($file) . ': Zertifikat nicht lesbar';
+        continue;
+      }
+      $left = (int) floor(((int) $info['validTo_time_t'] - time()) / 86400);
+      if ($left < 0) {
+        self::finding($r, $file, 'Zertifikat ist seit ' . (-$left) . ' Tagen abgelaufen');
+      } elseif ($left < 30) {
+        self::finding($r, $file, "Zertifikat läuft in $left Tagen ab");
+      } else {
+        $r['notes'][] = Text::printable(basename($file)) . ": noch $left Tage gültig";
+      }
+    }
+  }
+
+  private static function tablespaces(LocalServer $s, array &$r): void
+  {
+    foreach ($s->gaps['tablespaces'] ?? [] as $gap) {
+      $r['unchecked'][] = $gap . ' — mit Superuser-Rechten erneut prüfen';
+    }
+    if ($s->tablespaces === []) {
+      if (!isset($s->gaps['tablespaces'])) {
+        $r['notes'][] = 'Keine benutzerdefinierten Tablespaces angelegt';
+      }
+      return;
+    }
+    $dataUid = Platform::windows() ? null : (Fs::attempt(fn() => stat($s->dataDir))['uid'] ?? null);
+    foreach ($s->tablespaces as $name => $dir) {
+      if (Fs::attempt(fn() => is_dir($dir)) !== true) {
+        $r['unchecked'][] = 'Tablespace ' . Text::printable((string) $name) . ' (' . Text::printable($dir) . '): Verzeichnis nicht lesbar';
+        continue;
+      }
+      if (Platform::windows()) {
+        self::broadAces($s, $dir, $r);
+        continue;
+      }
+      $st = self::unixExposure($dir, $r);
+      if ($st === null) {
+        continue;
+      }
+      if ($st['uid'] === 0) {
+        self::finding($r, $dir, "Tablespace $name gehört root statt dem Dienstkonto");
+      } elseif ($dataUid !== null && $st['uid'] !== $dataUid) {
+        self::finding($r, $dir, "Tablespace $name gehört " . self::owner($st['uid']) . ' statt dem Besitzer des Datenverzeichnisses ' . self::owner($dataUid));
+      }
     }
   }
 
@@ -1056,6 +1773,36 @@ final class OsProbes
 
   private static function serviceUnit(LocalServer $s, array &$r): void
   {
+    if (Platform::windows()) {
+      $svc = WindowsFacts::get($s)['service'] ?? null;
+      if (!is_array($svc) || isset($svc['error'])) {
+        $r['unchecked'][] = 'Windows-Dienst nicht ermittelbar' . (is_array($svc) && isset($svc['error']) ? ': ' . $svc['error'] : '');
+        return;
+      }
+      $name = (string) ($svc['name'] ?? '');
+      if ($name === '') {
+        $r['notes'][] = 'Kein Windows-Dienst ermittelt (Server direkt gestartet)';
+        return;
+      }
+      $r['notes'][] = 'Windows-Dienst: ' . $name;
+      $regKey = 'HKLM\\SYSTEM\\CurrentControlSet\\Services\\' . $name;
+      if (($svc['unquotedPath'] ?? false) === true) {
+        self::finding($r, $regKey . ' (ImagePath)', 'Dienstpfad enthält Leerzeichen ohne Anführungszeichen — ermöglicht das Unterschieben einer Programmdatei auf dem Pfad');
+      }
+      foreach ((array) ($svc['envSecrets'] ?? []) as $secretVar) {
+        self::finding($r, $regKey . ' (Environment)', 'Umgebung des Dienstes enthält ' . (string) $secretVar . ' im Klartext (Wert wird nicht ausgegeben)');
+      }
+      foreach ((array) ($svc['regAces'] ?? []) as $ace) {
+        $sid = (string) ($ace['sid'] ?? '');
+        $label = self::BROAD_SIDS[$sid] ?? (preg_match(self::DOMAIN_USERS, $sid) === 1 ? 'Domänenbenutzer' : null);
+        $rights = (string) ($ace['rights'] ?? '');
+        $writes = preg_match('/WriteKey|SetValue|CreateSubKey|FullControl|WriteDac|WriteOwner|Delete/', $rights) === 1;
+        if ($label !== null && ($ace['type'] ?? '') === 'Allow' && $writes) {
+          self::finding($r, $regKey, "$label hat Schreibzugriff auf den Dienstschlüssel ($rights)");
+        }
+      }
+      return;
+    }
     if (($pid = self::pid($s, $r, 'Umgebung und Dienstdatei')) === null) {
       return;
     }

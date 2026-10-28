@@ -97,28 +97,11 @@ final class Journal
   public function __construct(public readonly string $dir, array $header)
   {
     Files::prepareDir($dir);
-    self::lockDown($dir);
     if (Fs::attempt(fn() => mkdir($dir . '/backup', 0700)) !== true) {
       throw new HardenException("Verzeichnis $dir/backup lässt sich nicht anlegen.");
     }
     $this->data = $header + ['journal_version' => self::VERSION, 'steps' => [], 'files' => [], 'sql' => []];
     $this->flush();
-  }
-
-  /** Only this user, SYSTEM and Administrators may touch the journal: it later drives writes with elevated rights. */
-  private static function lockDown(string $dir): void
-  {
-    if (!Platform::windows()) {
-      Fs::attempt(fn() => chmod($dir, 0700));
-      return;
-    }
-    $args = [Platform::systemTool('icacls.exe'), $dir, '/inheritance:r', '/grant:r', '*S-1-5-18:(OI)(CI)F', '/grant:r', '*S-1-5-32-544:(OI)(CI)F'];
-    if (($sid = Platform::currentSid()) !== null) {
-      array_push($args, '/grant:r', "*$sid:(OI)(CI)F");
-    }
-    if (Platform::run($args)[0] !== 0) {
-      throw new HardenException('Das Journal-Verzeichnis lässt sich nicht schützen (icacls) — nichts geändert.');
-    }
   }
 
   /** The journal drives writes with elevated rights: it is only trusted if nobody else could have touched it. */
@@ -135,9 +118,8 @@ final class Journal
       }
     }
     if (Platform::windows()) {
-      $broad = WindowsFacts::broadAcesOf($dir);
-      if ($broad === null || $broad !== []) {
-        throw new HardenException("$dir ist für andere Konten zugänglich oder die ACL ist nicht lesbar — dem Journal wird nicht vertraut.");
+      if (!WindowsFacts::isStrictlyPrivate($dir)) {
+        throw new HardenException("$dir gehört nicht diesem Konto bzw. den Administratoren, ist für andere Konten zugänglich oder die ACL ist nicht lesbar — dem Journal wird nicht vertraut.");
       }
     }
     $data = Fs::attempt(fn() => json_decode((string) file_get_contents($dir . '/apply-log.json'), true));
@@ -164,21 +146,26 @@ final class Journal
   /** @return ?string relative path of the copy, null if the file did not exist */
   public function backup(string $path): ?string
   {
-    // Read with the identity Fs::asOwnerOf chooses for the way: a symlink planted by the service account leads nowhere new.
-    $exists = Fs::asOwnerOf($path, fn() => Fs::attempt(fn() => is_file($path)));
-    if ($exists !== true) {
-      return null;
+    $release = WindowsPin::verifyTarget($path, mustExist: false);
+    try {
+      // Read with the identity Fs::asOwnerOf chooses for the way: a symlink planted by the service account leads nowhere new.
+      $exists = Fs::asOwnerOf($path, fn() => Fs::attempt(fn() => is_file($path)));
+      if ($exists !== true) {
+        return null;
+      }
+      $content = Fs::readServerFile($path);
+      $name = sprintf('backup/%02d-%s', count($this->data['files']) + 1, preg_replace('/[^A-Za-z0-9._-]/', '_', basename($path)));
+      $fh = $content === null ? null : Fs::attempt(fn() => fopen($this->dir . '/' . $name, 'x'));
+      $written = is_resource($fh) && Fs::attempt(fn() => fwrite($fh, $content)) === strlen($content);
+      $closed = is_resource($fh) && Fs::attempt(fn() => fclose($fh)) === true;
+      if (!$written || !$closed) {
+        throw new HardenException('Sicherung von ' . Text::printable($path) . ' fehlgeschlagen — nichts wurde geändert.');
+      }
+      Fs::attempt(fn() => chmod($this->dir . '/' . $name, 0600));
+      return $name;
+    } finally {
+      $release();
     }
-    $content = Fs::readServerFile($path);
-    $name = sprintf('backup/%02d-%s', count($this->data['files']) + 1, preg_replace('/[^A-Za-z0-9._-]/', '_', basename($path)));
-    $fh = $content === null ? null : Fs::attempt(fn() => fopen($this->dir . '/' . $name, 'x'));
-    $written = is_resource($fh) && Fs::attempt(fn() => fwrite($fh, $content)) === strlen($content);
-    $closed = is_resource($fh) && Fs::attempt(fn() => fclose($fh)) === true;
-    if (!$written || !$closed) {
-      throw new HardenException('Sicherung von ' . Text::printable($path) . ' fehlgeschlagen — nichts wurde geändert.');
-    }
-    Fs::attempt(fn() => chmod($this->dir . '/' . $name, 0600));
-    return $name;
   }
 
   public function file(string $path, string $action, ?string $backup): void
@@ -236,9 +223,10 @@ final class Guard
   private static ?array $active = null;
   private static bool $registered = false;
 
-  public static function arm(Journal $journal, ServerFiles $files): void
+  /** @param string[] $roots the server's directories WindowsPin holds (Windows): the restore rebuilds the hold over them */
+  public static function arm(Journal $journal, ServerFiles $files, array $roots = []): void
   {
-    self::$active = ['journal' => $journal, 'files' => $files];
+    self::$active = ['journal' => $journal, 'files' => $files, 'roots' => $roots];
     if (self::$registered) {
       return;
     }
@@ -264,7 +252,7 @@ final class Guard
     if (self::$active === null) {
       return;
     }
-    ['journal' => $journal, 'files' => $files] = self::$active;
+    ['journal' => $journal, 'files' => $files, 'roots' => $roots] = self::$active;
     self::$active = null;
     // Restoring in a foreign identity could write where it must not: leave the backups to the operator.
     if (Fs::$identityLost) {
@@ -285,7 +273,7 @@ final class Guard
       sapi_windows_set_ctrl_handler(fn() => true);
     }
     try {
-      $problems = ServerFiles::restore($journal->data['files'], $journal->dir);
+      $problems = ServerFiles::restore($journal->data['files'], $journal->dir, $roots);
       if ($problems === []) {
         $files->reload();
       }
@@ -295,6 +283,8 @@ final class Guard
       }
     } catch (Throwable) {
       // Last resort: nothing more to do than to tell the operator where the backups are.
+    } finally {
+      WindowsPin::end();
     }
     try {
       Out::err('pg-harden: Lauf unterbrochen. Sicherungen und Journal: ' . Text::printable($journal->dir) . "\n");
@@ -481,10 +471,12 @@ final class ServerFiles
    * copied, then rename — only if the temp file then has the owner and group of the original. Otherwise (Windows,
    * directory not writable, a file of root in the service account's directory, a group the identity is not a member of)
    * the new content is written in place first and the file shortened afterwards. As root, the work happens with the
-   * identity Fs::asOwnerOf chooses for the way.
+   * identity Fs::asOwnerOf chooses for the way; on Windows, WindowsPin holds the target directory open against rename/delete
+   * and verifies the final path before writing.
    */
   public static function overwrite(string $path, string $content): void
   {
+    $release = WindowsPin::verifyTarget($path, mustExist: true);
     try {
       Fs::asOwnerOf($path, function () use ($path, $content): void {
         if (is_link($path)) {
@@ -530,12 +522,15 @@ final class ServerFiles
       });
     } catch (ErrorException $e) {
       throw new HardenException('Schreiben von ' . Text::printable($path) . ' fehlgeschlagen: ' . $e->getMessage());
+    } finally {
+      $release();
     }
   }
 
   /** New directory with the owner and group of its parent (as root a plain mkdir would lock the server out of it). */
   public static function makeDir(string $dir, string $parent): void
   {
+    $release = WindowsPin::verifyTarget($dir, mustExist: false);
     try {
       Fs::asOwnerOf($dir, function () use ($dir, $parent): void {
         if (Fs::attempt(fn() => mkdir($dir, 0750)) !== true) {
@@ -547,8 +542,11 @@ final class ServerFiles
           Fs::attempt(fn() => chgrp($dir, $st['gid']));
         }
       });
+      WindowsPin::pinCreatedDir($dir);
     } catch (ErrorException $e) {
       throw new HardenException('Verzeichnis ' . Text::printable($dir) . ' lässt sich nicht anlegen: ' . $e->getMessage());
+    } finally {
+      $release();
     }
   }
 
@@ -564,6 +562,7 @@ final class ServerFiles
   /** New file next to an existing sibling: same mode and (as root) the same owner and group. */
   public static function create(string $path, string $content, string $sibling): void
   {
+    $release = WindowsPin::verifyTarget($path, mustExist: false);
     try {
       Fs::asOwnerOf($path, function () use ($path, $content, $sibling): void {
         $fh = Fs::attempt(fn() => fopen($path, 'x'));
@@ -593,6 +592,8 @@ final class ServerFiles
       });
     } catch (ErrorException $e) {
       throw new HardenException('Datei ' . Text::printable($path) . ' lässt sich nicht anlegen: ' . $e->getMessage());
+    } finally {
+      $release();
     }
   }
 
@@ -630,10 +631,24 @@ final class ServerFiles
     }
   }
 
-  /** Restores backups (modified files) and removes created files and directories, newest first. @return string[] problems */
-  public static function restore(array $files, string $journalDir): array
+  /**
+   * Restores backups (modified files) and removes created files and directories, newest first. On Windows with $roots (the server's
+   * directories of WindowsPin) the hold is (re)built first — a helper that ended or was released after a failed check must not leave
+   * the backups unrestored; a way that redirects now refuses the restore as it refused the write.
+   *
+   * @param string[] $roots
+   * @return string[] problems
+   */
+  public static function restore(array $files, string $journalDir, array $roots = []): array
   {
     $problems = [];
+    if (Platform::windows() && $roots !== [] && $files !== []) {
+      try {
+        WindowsPin::begin($roots, array_column($files, 'path'));
+      } catch (Throwable $e) {
+        return [(strtok($e->getMessage(), "\n") ?: get_class($e)) . ' — nichts zurückgespielt'];
+      }
+    }
     foreach (array_reverse($files) as $f) {
       try {
         if ($f['action'] === 'created') {
@@ -641,14 +656,22 @@ final class ServerFiles
           if (Fs::definitelyAbsent($f['path'])) {
             continue;
           }
-          Fs::asOwnerOf($f['path'], function () use ($f): void {
-            if (file_exists($f['path'])) {
-              $removed = is_dir($f['path']) ? rmdir($f['path']) : unlink($f['path']);
-              if (!$removed) {
-                throw new HardenException('Eintrag ' . $f['path'] . ' ließ sich nicht entfernen');
-              }
+          $release = WindowsPin::verifyTarget($f['path'], mustExist: false);
+          try {
+            if (Platform::windows() && Fs::attempt(fn() => is_dir($f['path'])) === true) {
+              WindowsPin::unpinDirForRemove($f['path']);
             }
-          });
+            Fs::asOwnerOf($f['path'], function () use ($f): void {
+              if (file_exists($f['path'])) {
+                $removed = is_dir($f['path']) ? rmdir($f['path']) : unlink($f['path']);
+                if (!$removed) {
+                  throw new HardenException('Eintrag ' . $f['path'] . ' ließ sich nicht entfernen');
+                }
+              }
+            });
+          } finally {
+            $release();
+          }
         } else {
           $content = Fs::attempt(fn() => file_get_contents($journalDir . '/' . $f['backup']));
           if ($content === null) {
@@ -668,6 +691,9 @@ final class ServerFiles
 final class Applier
 {
   private const HBA_TYPES = ['host', 'hostssl', 'hostnossl', 'hostgssenc', 'hostnogssenc'];
+
+  /** @var string[] the server's directories WindowsPin holds in the file phase; fail() rebuilds the hold over them before it restores */
+  private array $pinRoots = [];
 
   public function __construct(
     private readonly Connector $connector,
@@ -1029,6 +1055,25 @@ final class Applier
       $journal->step('Dateien', 'FEHLER', 'hba_file/config_file nicht sichtbar');
       return false;
     }
+    // Windows: the server's directories are held from before the first read to the end of the file phase (WindowsPin, without
+    // FILE_SHARE_DELETE/FILE_SHARE_WRITE, verified by the final path of each handle) — what is read and written then goes the held way.
+    $pinRoots = $this->pinRoots = array_values(array_unique([$local->dataDir, dirname($confPath)]));
+    try {
+      WindowsPin::begin($pinRoots, array_values(array_filter([$plan['hba'] !== [] ? $hbaPath : null, $confPath])));
+    } catch (Throwable $e) {
+      $journal->step('Vorbereitung', 'FEHLER', (strtok($e->getMessage(), "\n") ?: get_class($e)) . ' — nichts geändert');
+      return false;
+    }
+    try {
+      return $this->applyHeldFiles($plan, $local, $journal, $files, $hbaPath, $confPath, $pinRoots);
+    } finally {
+      WindowsPin::end();
+    }
+  }
+
+  /** applyFiles once the server's directories are held (WindowsPin; elsewhere a no-op). */
+  private function applyHeldFiles(array $plan, LocalServer $local, Journal $journal, ServerFiles $files, string $hbaPath, string $confPath, array $pinRoots): bool
+  {
     $roots = array_values(array_filter([Fs::canonical($local->dataDir), Fs::canonical(dirname($confPath))]));
     $inside = function (?string $path) use ($roots): bool {
       $n = $path === null ? null : ServerFiles::norm($path);
@@ -1058,12 +1103,16 @@ final class Applier
     }
     try {
       $hbaRowsBefore = $plan['hba'] !== [] ? $files->hbaRows() : [];
+      // The include directory is known only now (from postgresql.conf): its way is held as well before anything is read there.
+      $prelimTargets = array_values(array_filter([$plan['hba'] !== [] ? $hbaPath : null, $confPath, $plan['conf'] !== [] ? $includeDir : null]));
+      WindowsPin::begin($pinRoots, $prelimTargets);
       $hbaNew = $plan['hba'] !== [] ? $this->editHba($hbaPath, $plan['hba'], $hbaRowsBefore, $local, $journal) : null;
       // The same content that $inside checked above: a second read could name a different include_dir.
       $confNew = $plan['conf'] !== [] ? $this->prepareConf($plan['conf'], $confPath, (string) $config) : null;
       // The identity for every target is settled now, before the first change: a refusal (a directory others can write,
       // an owner without an account) must not come halfway through the file phase.
       $targets = array_merge($hbaNew !== null ? [$hbaPath] : [], array_column($confNew['writes'] ?? [], 'path'), array_filter(array_column($confNew['writes'] ?? [], 'mkdir')));
+      WindowsPin::begin($pinRoots, array_values(array_unique(array_merge($prelimTargets, $targets))));
       foreach ($targets as $target) {
         Fs::asOwnerOf($target, static fn() => null);
       }
@@ -1082,7 +1131,7 @@ final class Applier
     }
 
     // From here on the backups are the way back — also if this process dies (Guard) or throws anything at all.
-    Guard::arm($journal, $files);
+    Guard::arm($journal, $files, $pinRoots);
     try {
       try {
         if ($hbaNew !== null) {
@@ -1117,7 +1166,9 @@ final class Applier
           }
         }
       } catch (HardenException $e) {
-        return $this->fail($files, $journal, 'Schreiben', $e->getMessage());
+        // A failed check after the operation (WindowsPin) carries the operation's own error as previous: both belong in the journal.
+        $previous = $e->getPrevious();
+        return $this->fail($files, $journal, 'Schreiben', $e->getMessage() . ($previous !== null ? ' (zuvor: ' . (strtok($previous->getMessage(), "\n") ?: get_class($previous)) . ')' : ''));
       }
 
       // The server reads the files from disk for these two views: validate before anything is reloaded.
@@ -1153,6 +1204,7 @@ final class Applier
     } catch (Throwable $e) {
       return $this->fail($files, $journal, 'Unerwarteter Fehler', strtok($e->getMessage(), "\n") ?: get_class($e));
     } finally {
+      WindowsPin::end();
       Guard::disarm();
     }
   }
@@ -1180,7 +1232,7 @@ final class Applier
     };
     $problems = [];
     try {
-      $problems = ServerFiles::restore($journal->data['files'], $journal->dir);
+      $problems = ServerFiles::restore($journal->data['files'], $journal->dir, $this->pinRoots);
     } catch (Throwable $e) {
       $problems[] = strtok($e->getMessage(), "\n") ?: get_class($e);
     }
@@ -1479,7 +1531,17 @@ final class Rollback
     };
     $ok = true;
     if ($data['files'] !== []) {
-      $problems = ServerFiles::restore($data['files'], $dir);
+      $confPath = $ctx->local->path('config_file');
+      $pinRoots = array_values(array_unique(array_filter([$ctx->local->dataDir, $confPath === null ? null : dirname($confPath)])));
+      $problems = [];
+      try {
+        // restore() holds the server's directories itself (WindowsPin) and rebuilds the hold if the helper ends in between.
+        $problems = ServerFiles::restore($data['files'], $dir, $pinRoots);
+      } catch (Throwable $e) {
+        $problems[] = strtok($e->getMessage(), "\n") ?: get_class($e);
+      } finally {
+        WindowsPin::end();
+      }
       $step($problems === [] ? 'OK' : 'FEHLER', $problems === [] ? count($data['files']) . ' Datei(en) zurückgespielt' : implode(' | ', $problems));
       $ok = $problems === [];
       $errors = array_merge($files->configErrors(), $files->hbaErrors());

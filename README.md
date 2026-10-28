@@ -8,7 +8,7 @@ It covers `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256 password storage,
 `SECURITY DEFINER` functions, logging, and the operating-system side (file permissions, service account) of PostgreSQL 14 to 18 and
 19 RC1. A PHP command-line tool without Composer dependencies (PHP 8.3 with `pdo_pgsql` and `mbstring`).
 
-- **72 rules** (61 for the server, 11 for the client machine), each with severity, rationale, remediation and — where it is safe — a SQL or
+- **86 rules** (74 for `check`, 12 for `client`), each with severity, rationale, remediation and — where it is safe — a SQL or
   configuration fix with its rollback
 - **Read-only by default:** `check`, `plan`, `verify`, `client` and `rules` are designed not to write to the server. Every database check runs as a single
   prepared statement in `BEGIN TRANSACTION READ ONLY … ROLLBACK`
@@ -18,7 +18,7 @@ It covers `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256 password storage,
   of obvious candidates (plus an optional operator list of at most 100 terms; no external wordlists); a report only names the role, never the password
 - **Run-tested on PostgreSQL 14, 15, 16, 17, 18 and 19rc1** (Docker, Debian 13) and PostgreSQL 18 on Windows 11 — the matrix shows that the tool
   runs and where versions differ, not how well each rule detects problems; see [tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md) (German)
-- Output as terminal text, HTML or JSON; preliminary mapping of the rules to ISO/IEC 27001:2022 Annex A (identifiers not yet verified)
+- Output as terminal text, HTML or JSON; preliminary mappings of the rules to BSI IT-Grundschutz `APP.4.3`, ISO/IEC 27001:2022 Annex A and the CIS PostgreSQL Benchmark (identifiers not yet verified; for CIS an own grouping, not CIS identifiers)
 
 pg-harden is not an implementation of a published benchmark and does not replace one, nor a review of your own requirements. It adds a change
 plan with rollback, a check of the client machine and an `apply` step.
@@ -145,9 +145,13 @@ current run; otherwise it is reported as "not comparable".
   nothing beyond its rights (test T14). Reads for a change go the same way (only regular files, size limit). A directory of root on the way
   that group or others can write is refused; the identity of every target is settled before the first change. `postgresql.conf` is read once for
   the change; `apply` creates at most one directory level. A file of root in a directory of the service account is written in place if that
-  account may write it, otherwise refused. Windows has no identity switch: `client --user` does not read files in the examined account's
-  profile whose way leads elsewhere through a junction or symbolic link (reported as "nicht geprüft"; remaining gaps in the CHANGELOG);
-  for `check`, `apply` and `rollback`, junctions there have not been examined yet. Files are replaced via a
+  account may write it, otherwise refused. Windows has no identity switch: there a helper (`WindowsPin`) holds the root and target directories
+  open without `FILE_SHARE_DELETE` (an empty one also without `FILE_SHARE_WRITE`) for the entire file phase of `apply` and `rollback` and checks on these handles, before
+  and after every write, that each directory is still a plain directory under its final path (`GetFinalPathNameByHandleW`): no directory can be
+  renamed away and replaced by a junction between check and write, and one changed in place stops the operation; without a running helper
+  nothing is written; ACLs and `postmaster.pid`
+  are read via the open handle or the same redirect check (`client --user` and `check` refuse paths through junctions or symbolic links;
+  remaining limits in the CHANGELOG). Files are replaced via a
   temp file (Windows: write first, then truncate), never emptied beforehand. If the process dies in the middle of the file phase, a watchdog
   restores the backups — outside Windows only with the PHP extensions `pcntl` and `posix`; without them `apply` does not change files.
 - **Reload:** an unconfirmed reload counts as an error.
@@ -234,16 +238,18 @@ GRANT SELECT ON visibility.databases TO PUBLIC;
 ## Operating-system rules (category "Betriebssystem", `check`)
 
 Only when pg-harden runs on the server. The report header says whether the rules were checked or why not (remote server or container;
-`postmaster.pid` unreadable). Checked: permissions of the data directory, configuration and log files, TLS keys and socket (Linux: modes; Windows:
-ACL against Everyone/Users/Authenticated Users), service account, service file and process environment for plaintext secrets (location and name
-only), umask, log directory on its own volume, free space, package origin (Linux) or signature (Windows).
+`postmaster.pid` unreadable). Checked: permissions of the data directory, custom tablespaces, configuration (including files pulled in via
+`include`/`include_dir`) and log files, TLS keys, expiry of server and CA certificates and socket (Linux: modes; Windows: ACL via the open handle
+against Everyone/Users/Authenticated Users), service account, service file or Windows service registry (including unquoted `ImagePath` and service
+key ACL) and process environment for plaintext secrets (location and name only), umask, log directory on its own volume, free space, package
+origin (Linux) or signature (Windows).
 
 ## `client` — the machine you connect from
 
-No database connection. For the current account or (with `--user`, administrator/root required) another account: `pg_service.conf` with
+No database connection (`verify --previous=<client-report.json>` also compares earlier client reports). For the current account or (with `--user`, administrator/root required) another account: `pg_service.conf` with
 `password=`, the password file (Windows ACL, location in cloud folders, on network shares or in roaming profiles, superuser entries with wildcard
 host, hidden lines, missing loopback entries; on Unix only a hint, because libpq ignores the file when its permissions are open anyway),
-`PGPASSWORD` in environment and registry, passwords in profiles, scripts, compose and `.env` files, cron, systemd files and the Windows task
+`psql` command history (`psql_history` / `.psql_history` permissions and plaintext passwords), `PGPASSWORD` in environment and registry, passwords in profiles, scripts, compose and `.env` files, cron, systemd files and the Windows task
 scheduler, client keys and certificates (permissions, expiry). Secrets found are reported with location and line only.
 
 `--user` searches the whole profile of the other account, not just PostgreSQL files. For employee accounts that needs a legal basis (in
@@ -255,16 +261,18 @@ folders would be downloaded when read). More directories with `--scan=a,b`.
 
 ## Reports contain role, object and network names
 
-Role names are often personal identifiers, `pg_hba` lines contain networks. On Linux and macOS reports and plans are written with file permissions
-for the owner only; on Windows the inherited folder ACL applies — choose a protected folder there. Store confidentially, check before passing to
-third parties, define a retention period.
+Role names are often personal identifiers, `pg_hba` lines contain networks. Reports (`--out`), plan and journal directories are written with file
+permissions for the executing account only (on Windows plus `SYSTEM` and `Administrators` via `icacls`). Store confidentially, check before passing
+to third parties, define a retention period.
 
 ## Rules and mappings
 
 - `rules/*.json` — rules as data: check by parameter (`setting`), SQL (`query`, one row per finding) or built-in check (`weak_passwords`, `os`,
   `client`), version, required rights (`requires`), platform, command (`check`/`client`), fix (`conf`, `sql`, `hba`, `manual`) and way back, rationale
-- `mappings/*.json` — preliminary mapping to ISO 27001:2022 Annex A (identifiers not yet verified) and BSI APP.4.3 (placeholder). Identifiers and short titles
-  only, in the spirit of the standard, no standard text
+- `mappings/*.json` — preliminary mappings to BSI IT-Grundschutz `APP.4.3 Relationale Datenbanken`, ISO/IEC 27001:2022 Annex A and the CIS
+  PostgreSQL Benchmark (own grouping along sections 1–7, not CIS identifiers); the identifiers of all three are not yet verified. Identifiers and own short titles only,
+  no standard or benchmark text; a mapping says which rules relate to a requirement, not that it is fulfilled. CIS Benchmarks is a trademark of
+  the Center for Internet Security; pg-harden is not affiliated with, endorsed or certified by CIS
 
 The tool delivers technical results that can serve as evidence in an audit. The mapping only shows the result of the rules assigned to each item —
 it is not a statement that a requirement of the standard is met; organizational parts are not checked.
@@ -284,6 +292,9 @@ Operating-system rules, `apply` and `rollback` need access to the server's files
 in and run as root there. Practise against `lab/` only — never against production systems.
 
 `tests/` contains `allowlist-test.php` (unit test of the allowlist that `apply` and `rollback` pass SQL through: `php tests/allowlist-test.php`),
+`catalog-test.php` (offline test of the rule catalog, framework mappings and `Verifier`), `windows-redirect.php` and `windows-admin-test.ps1`
+(Windows path verification, handle ACLs and directory pinning `WindowsPin` against junctions; the second one, with a temporary local account in an
+elevated PowerShell, has not been run yet),
 `lab-matrix.sh` (regression run of `apply`/`rollback` in a container, calls `lab-identity.php` for the identity rules when writing and reading as root),
 `lab-visibility.sh` and `lab-upgrade.sh` (catalog visibility, `pg_upgrade`,
 restore) and `run-version-matrix.sh` with `matrix-table.php` (version matrix, result in [tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)). The
@@ -291,6 +302,11 @@ container scripts change passwords, roles and databases and only start with `PGH
 against an instance with real data.
 
 ## Status
+
+0.4.0 (unreleased): Windows write side holds the server's directories against a swap for a junction via open directory handles without `FILE_SHARE_DELETE` (`WindowsPin`),
+handle-based ACL reading (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), restricted ACLs for journals and output files on Windows (checked when a journal is loaded), `verify`
+support for client reports, rule catalog expanded to 86 rules (74 for `check`, 12 for `client`), preliminary mappings for BSI IT-Grundschutz
+`APP.4.3` and the CIS PostgreSQL Benchmark added. Details in [CHANGELOG.md](CHANGELOG.md).
 
 0.3.2 (2026-10-26): **security fix** for `check` and `client` as root (another account could make them read a file of root through a
 link, steer the process probes to a foreign process via `postmaster.pid`, or stop `check` with a FIFO); files of other accounts are now

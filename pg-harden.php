@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * pg-harden 0.3.2
+ * pg-harden 0.4.0
  * Checks a PostgreSQL instance against a data-driven rule catalog, writes a change plan
  * and compares before/after reports.
  *
@@ -36,7 +36,7 @@ declare(strict_types=1);
  * Results and plans are suggestions: review them and test every change before applying it to production.
  */
 
-const PG_HARDEN_VERSION = '0.3.2';
+const PG_HARDEN_VERSION = '0.4.0';
 
 require_once __DIR__ . '/src/Os.php';
 require_once __DIR__ . '/src/Client.php';
@@ -214,10 +214,36 @@ final class Files
       if (function_exists('posix_geteuid') && fileowner($dir) !== posix_geteuid()) {
         throw new HardenException("$dir gehört einem anderen Benutzer. Ein neues Verzeichnis angeben.");
       }
+      // Windows: an owner keeps WRITE_DAC whatever icacls removes — a directory of another account is refused before its ACL is touched.
+      if (Platform::windows() && !in_array(WindowsFacts::strictAcl($dir)['owner'] ?? null, array_filter([Platform::currentSid(), 'S-1-5-18', 'S-1-5-32-544']), true)) {
+        throw new HardenException("$dir gehört einem anderen Konto oder sein Besitzer ist nicht prüfbar. Ein neues Verzeichnis angeben.");
+      }
+    } elseif (!@mkdir($dir, 0700, true)) {
+      throw new HardenException("Verzeichnis $dir lässt sich nicht anlegen.");
+    }
+    self::lockDown($dir, isDir: true);
+    // Windows: the owner keeps WRITE_DAC whatever icacls removed — a directory of another account is not used (as the posix check above).
+    if (Platform::windows() && !WindowsFacts::isStrictlyPrivate($dir)) {
+      throw new HardenException("$dir gehört einem anderen Konto oder lässt sich nicht auf dieses Konto, SYSTEM und die Administratoren beschränken. Ein neues Verzeichnis angeben.");
+    }
+  }
+
+  /**
+   * Restricts a directory or output file to the running account (plus SYSTEM and Administrators on Windows).
+   * Prevents other local accounts under %TEMP% or user directories from reading reports, plans or journals.
+   */
+  public static function lockDown(string $path, bool $isDir = false): void
+  {
+    if (!Platform::windows()) {
+      Fs::attempt(fn() => chmod($path, $isDir ? 0700 : 0600));
       return;
     }
-    if (!@mkdir($dir, 0700, true)) {
-      throw new HardenException("Verzeichnis $dir lässt sich nicht anlegen.");
+    // Without the own SID the restriction would lock this account out of its own report or journal.
+    $sid = Platform::currentSid() ?? throw new HardenException("Konto dieses Prozesses nicht bestimmbar (whoami) — Zugriffsrechte von $path werden nicht eingeschränkt.");
+    $perm = $isDir ? '(OI)(CI)F' : 'F';
+    $args = [Platform::systemTool('icacls.exe'), $path, '/inheritance:r', '/grant:r', "*S-1-5-18:$perm", '/grant:r', "*S-1-5-32-544:$perm", '/grant:r', "*$sid:$perm"];
+    if (Platform::run($args)[0] !== 0) {
+      throw new HardenException("Zugriffsrechte von $path lassen sich nicht einschränken (icacls).");
     }
   }
 }
@@ -927,11 +953,7 @@ final class ExtraCandidates
   /** Windows: owner is this account (or Administrators) and only this account, SYSTEM and Administrators have access. */
   private static function checkWindowsAcl(string $path): void
   {
-    $acl = WindowsFacts::strictAcl($path);
-    $me = Platform::currentSid();
-    $allowed = array_filter([$me, 'S-1-5-18', 'S-1-5-32-544', 'S-1-3-0']);
-    if ($acl === null || $me === null || !in_array($acl['owner'], [$me, 'S-1-5-32-544'], true)
-      || array_filter($acl['sids'], fn($sid) => !in_array($sid, $allowed, true)) !== []) {
+    if (!WindowsFacts::isStrictlyPrivate($path)) {
       throw new HardenException('--extra-candidates: Besitzer oder Zugriffsliste der Datei sind nicht eingeschränkt genug (nur dieses Konto, SYSTEM und Administratoren; unbekannte Einträge zählen nicht) — oder die ACL ist nicht lesbar.');
     }
   }
@@ -1380,7 +1402,7 @@ final class TextRenderer
     $m = $report['meta'];
     $c = $m['counts'];
     $client = ($m['mode'] ?? 'server') === 'client';
-    $kind = $client ? 'Client-Prüfung' : (isset($report['comparison']) ? 'Prüfbericht mit Vergleich' : 'Prüfbericht');
+    $kind = $client ? (isset($report['comparison']) ? 'Client-Prüfung mit Vergleich' : 'Client-Prüfung') : (isset($report['comparison']) ? 'Prüfbericht mit Vergleich' : 'Prüfbericht');
     $out = 'pg-harden ' . PG_HARDEN_VERSION . " · $kind · " . self::when($m['created_at'] ?? '') . "\n";
     if ($client) {
       $out .= self::field('Rechner', Text::printable($m['server']) . ' · Konto ' . Text::printable($m['user']));
@@ -1865,7 +1887,7 @@ final class Verifier
   public static function isReport(mixed $r): bool
   {
     if (!is_array($r) || !is_array($r['meta'] ?? null) || !is_array($r['results'] ?? null) || !array_is_list($r['results'])
-      || preg_match('/^pg-harden 0\.[23]\./', (string) ($r['meta']['tool'] ?? '')) !== 1
+      || preg_match('/^pg-harden (?:0\.(?:[2-9]|\d{2,})\.|[1-9]\d*\.)/', (string) ($r['meta']['tool'] ?? '')) !== 1
       || array_filter(['server', 'server_version', 'user', 'created_at'], fn($k) => isset($r['meta'][$k]) && !is_string($r['meta'][$k])) !== []) {
       return false;
     }
@@ -1926,12 +1948,14 @@ final class Verifier
       }
     }
     $warnings = [];
-    foreach (['server' => 'Server', 'server_version' => 'Version', 'user' => 'Benutzer'] as $field => $label) {
+    $client = ($current['meta']['mode'] ?? 'server') === 'client';
+    $fields = $client ? ['server' => 'Rechner', 'user' => 'Konto'] : ['server' => 'Server', 'server_version' => 'Version', 'user' => 'Benutzer'];
+    foreach ($fields as $field => $label) {
       if (($previous['meta'][$field] ?? null) !== ($current['meta'][$field] ?? null)) {
         $warnings[] = "$label weicht ab: " . ($previous['meta'][$field] ?? '?') . ' → ' . ($current['meta'][$field] ?? '?');
       }
     }
-    if (($previous['meta']['databases'] ?? []) !== ($current['meta']['databases'] ?? [])) {
+    if (!$client && ($previous['meta']['databases'] ?? []) !== ($current['meta']['databases'] ?? [])) {
       $warnings[] = 'Geprüfte Datenbanken weichen ab.';
     }
     return [
@@ -2072,10 +2096,23 @@ final class App
     if (!Verifier::isReport($previous)) {
       throw new HardenException("$file ist kein pg-harden-Bericht ab Version 0.2.");
     }
-    if (($previous['meta']['mode'] ?? 'server') !== 'server') {
-      throw new HardenException("$file ist ein Client-Bericht — verify vergleicht nur Berichte von check.");
+    $mode = (string) ($previous['meta']['mode'] ?? 'server');
+    if ($mode === 'client') {
+      foreach (['host', 'port', 'dbname', 'sslmode', 'databases', 'dir', 'extra-candidates'] as $serverOnly) {
+        if ($opt->has($serverOnly)) {
+          throw new HardenException("--$serverOnly gilt nicht beim Vergleich eines Client-Berichts.");
+        }
+      }
+      $ctx = ClientContext::resolve($opt);
+      $report = Report::buildClient($ctx, $catalog, ClientChecker::run($catalog, $ctx));
+    } elseif ($mode === 'server') {
+      if ($opt->has('scan')) {
+        throw new HardenException('--scan gilt nur für client.');
+      }
+      $report = self::runCheck(new Connector($opt), $opt, $catalog);
+    } else {
+      throw new HardenException("$file hat einen unbekannten Berichtsmodus.");
     }
-    $report = self::runCheck(new Connector($opt), $opt, $catalog);
     $report['comparison'] = Verifier::compare($previous, $report);
     self::output($opt, $report);
     return Report::exitCode($report);
@@ -2115,7 +2152,31 @@ final class App
     };
     $out = $opt->get('out');
     if ($out !== null) {
-      Files::write($out, $content);
+      // A new file of this account, restricted while still empty, then put in place: the report never carries inherited access
+      // rights, and a handle another account kept open on an existing file of that name never sees the new content.
+      // Created, restricted and written through one handle: nothing goes through the path between restricting and writing.
+      $tmp = $out . '.' . bin2hex(random_bytes(6)) . '.tmp';
+      $fh = Fs::attempt(fn() => fopen($tmp, 'x'));
+      if ($fh === null) {
+        throw new HardenException("$out lässt sich nicht anlegen (Verzeichnis nicht beschreibbar?).");
+      }
+      try {
+        try {
+          Files::lockDown($tmp);
+          $written = Fs::attempt(fn() => fwrite($fh, $content)) === strlen($content);
+          Fs::attempt(fn() => fsync($fh));
+        } finally {
+          $closed = Fs::attempt(fn() => fclose($fh)) === true;
+        }
+        if (!$written || !$closed) {
+          throw new HardenException("$out konnte nicht vollständig geschrieben werden.");
+        }
+        if (Fs::attempt(fn() => rename($tmp, $out)) !== true) {
+          throw new HardenException("$out lässt sich nicht schreiben (Verzeichnis oder vorhandener Eintrag gleichen Namens).");
+        }
+      } finally {
+        Fs::attempt(fn() => file_exists($tmp) && unlink($tmp));
+      }
       Out::write("Bericht geschrieben: $out (" . TextRenderer::findings($report['meta']['counts']['fail']) . ")\n");
     } else {
       Out::write($content);

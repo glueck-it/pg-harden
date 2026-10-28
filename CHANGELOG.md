@@ -2,22 +2,88 @@
 
 ## Unreleased
 
-- **Windows, `client --user=<account>`: files below the examined account's profile are no longer read through a junction or
-  symbolic link the account placed there (remaining gaps below).** Windows has no identity switch, so an administrator would follow
-  such a junction — to another profile or a file of the administrators — and report it as the account's (places and kinds of finding,
-  ACL entries; no values). A non-administrator can create a junction.
-  - Changed: a file below the profile is read only if the final path Windows reports for the opened file is exactly the profile plus
-    the remaining names. This is checked before and after reading, and after reading the file at the path must still be the one that
-    was read. It applies to the password file, service file, client certificates, the file search and the ACLs.
-  - Reported as "nicht geprüft" instead: a way through a junction or symbolic link, a path that cannot be resolved, one with `..`, and
+- **Windows, `apply`, `rollback`, `check` and `client --user=<account>`: the write side holds the server's directories against a swap for a junction, handle-based ACL
+  reading, and redirect checks below the profile and the server's data directory.** Windows has no identity switch (`Fs::asOwnerOf` /
+  `Fs::asReaderOf` cannot drop administrator privileges to the service or user account), so a non-administrator who owns or may write the
+  data directory or profile can place junctions there.
+  - **`apply` and `rollback` on Windows (`WindowsPin`, `ServerFiles::overwrite`, `create`, `makeDir`, `restore`, `Journal::backup`):**
+    a persistent PowerShell 5.1 helper (`WinHandle`, Win32 `CreateFileW` with `FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES`,
+    `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT`, without `FILE_SHARE_DELETE`) holds the server's root directories
+    (`data_directory` and the directory of `postgresql.conf`) and every target directory on the way open for the duration of the file
+    phase, from before the first read of `postgresql.conf`. Each handle is verified not to be a reparse point
+    (`GetFileInformationByHandle`) and its final path (`GetFinalPathNameByHandleW`) must match the expected path from the root down.
+    While held this way, Windows refuses to rename or delete any pinned directory, so no directory on the way can be renamed away and
+    replaced by a junction between check and write. An empty directory (such as a new `conf.d`) is held without `FILE_SHARE_WRITE` as
+    well, because only an empty directory can be turned into a junction in place (by design; that conversion itself is not reproduced in
+    the tests, and a directory with content could be emptied first — the handle check below catches such a change); a directory with content keeps `FILE_SHARE_WRITE`, so the server can
+    still rename files in its data directory (`ALTER SYSTEM`, `current_logfiles`) during the file phase. Before and after each file
+    operation `WindowsPin::verifyTarget` has the helper check on all held handles that every directory is still a plain directory under
+    its final path, and checks the target entry; a change aborts the operation (and the run restores its backups). Newly created
+    directories (`conf.d`) are added to the active hold without releasing parent handles; `restore` releases only the removed
+    directory's handle right before `rmdir`. Fail-closed: without an active hold, with a helper that cannot start, has ended or does not
+    answer (30 s, then terminated), or with a path that redirects, nothing is written. Every restore (failed run, `Guard` after Ctrl+C,
+    `rollback`) rebuilds the hold over the server's directories first; the helper runs in its own process group, so Ctrl+C reaches
+    only PHP. Answers of the helper carry the id of their request. `apply` writes only below the data directory and the directory of
+    `postgresql.conf` (unchanged), so a journal never names other targets.
+  - **ACL reading via the open handle (`GetSecurityInfo` + `GetFinalPathNameByHandleW`):** replaces `Get-Acl -LiteralPath` in
+    `WindowsFacts::get`/`aces`, `WindowsFacts::strictAcl`, `WindowsFacts::broadAcesOf` (`src/Os.php`) and `ClientProbes::windowsFacts` /
+    `aclProblems` (`src/Client.php`). Each path is opened once; both its final path and its security descriptor are read from that
+    handle, and the ACL is used only if the handle's final path is not redirected (`Fs::windowsRedirected`).
+  - **`check` on Windows (`LocalServer::detect`):** reads `postmaster.pid` in the data directory with `Fs::readGuarded(..., $dir)` using
+    the data directory as base, refusing junctions inside the data directory.
+  - **`client --user=<account>` on Windows:** a file below the profile is read only if the final path Windows reports for the opened file
+    is exactly the profile plus the remaining names, checked before and after reading (`Fs::readGuarded`, `Fs::windowsRedirected`).
+    Reported as "nicht geprüft" instead: a way through a junction or symbolic link, a path that cannot be resolved, one with `..`, and
     one that reaches into the profile under another spelling (a short name such as `FRANK~1`; forward slashes, case and a leading
     `\\?\` are compared as mere spelling).
-  - Not covered: an account that keeps swapping a directory for a junction and back can still hit the moment of a read (it then needs
-    three swaps in time) and more easily the PowerShell run that reads the ACLs (two swaps within seconds; it takes paths, not
-    handles). A hard link is no redirect by its path; Windows 11 lets a non-administrator create one only to a file the account may
-    write. Whether a file exists, its name and its size may still be taken through a redirect. Files outside the profile are not judged.
-    `check`, `apply` and `rollback` on Windows (files in the data directory of the service account): not examined yet.
-  - Test: `tests/windows-redirect.php` (no administrator rights needed).
+  - **Remaining limits on Windows:** on the read side (`check`, `client --user`), content reads check the path before and after reading
+    and verify `stat`/`fstat` identity rather than holding parent directories open without `FILE_SHARE_DELETE`. A hard link is no
+    redirect by its path; Windows 11 lets a non-administrator create one only to a file the account may write. Whether a file exists, its
+    name and its size may still be taken through a redirect. Files outside the profile or data directory are not judged.
+  - **Strict ACLs for journals, plan directories and `--out` reports on Windows (`Files::lockDown`, `Journal::load`,
+    `WindowsFacts::isStrictlyPrivate`):** `Files::prepareDir` and `App::output` (`--out`) restrict the directory or file to the
+    executing account, `SYSTEM` and `Administrators` (`icacls`) — changed: also an existing empty directory given with `--dir` (on Linux
+    and other Unix systems `chmod 0700` on it as well), which on Windows must belong to this account, `SYSTEM` or the Administrators (an
+    owner keeps the right to change the ACL); a directory of another account is refused before its ACL is touched. A `--out` report is
+    written to a new file of this account, restricted while still empty, and then renamed into place (on every platform), so a handle
+    kept open on an existing file of that name never sees the new content. Without the own SID (`whoami`) nothing is restricted and the
+    run stops. `Journal::load` verifies via the open handle that owner and entries leave no other SID access before trusting a journal.
+  - **`check` without full rights (all platforms):** when `pg_file_settings`, `pg_hba_file_rules` or `pg_tablespace` cannot be read,
+    `os.config_permissions` and `os.tablespace_permissions` now report "nicht geprüft" instead of passing in silence.
+  - **`verify` for client reports and version `0.4.0+`:** `verify --previous=<report.json>` now compares both `check` and `client`
+    reports, and `Verifier::isReport` accepts reports from `0.4.0` and later releases.
+  - **Tests:** `tests/windows-redirect.php` (throw-away directories in `%TEMP%`, no administrator rights needed), `tests/catalog-test.php`
+    (offline test for the rule catalog, framework mappings and `Verifier`) and `tests/windows-admin-test.ps1` (for an elevated PowerShell:
+    creates a temporary local non-administrator account, tests `client --user`, `check` and `apply`/`rollback` directory pinning against
+    junctions in its profile and data directory, and removes the account and its profile afterwards; not run yet).
+- **Expanded hardening catalog (86 rules), OS/client probes, BSI IT-Grundschutz APP.4.3 and CIS PostgreSQL Benchmark mappings:**
+  - **PostgreSQL server rules (`rules/postgresql.json`):** added `tls.ciphers`, `hba.weak_options` (`ident` over TCP and
+    `clientcert=verify-ca`), `auth.passwordless_or_expired`, `roles.replication_login`, `roles.createrole_self_grant` (PostgreSQL 16+),
+    `db.default_acl_public` (`CREATE` on non-system schemas and `ALTER DEFAULT PRIVILEGES` for `PUBLIC`), `db.rls_policies_inactive`
+    (tables with policies in `pg_policy` where `ENABLE ROW LEVEL SECURITY` is off, and tables with `ENABLE ROW LEVEL SECURITY` but no
+    policy in `pg_policy`),
+    `code.fdw_secrets` (`USER MAPPING FOR PUBLIC` and cleartext secrets in `pg_user_mapping` / `pg_subscription`),
+    `code.event_triggers` (inventory), `log.lock_waits` and `data.crash_safety` (`fsync`, `full_page_writes`, `ignore_checksum_failure`,
+    `zero_damaged_pages`); extended `conf.role_db_overrides`, `roles.server_file_access` (`pg_read_all_data`, `pg_write_all_data`) and
+    `log.pgaudit` (checks that `pgaudit.log` or `pgaudit.log_role` is configured when loaded).
+  - **Operating system rules and probes (`rules/system.json`, `src/Os.php`):** added `os.ssl_cert_expiry` (`ssl_cert_file` and
+    `ssl_ca_file`), `os.tablespace_permissions` (custom tablespaces from `pg_tablespace`), included files from `pg_file_settings` and
+    `pg_hba_file_rules` in `os.config_permissions`, and extended `os.service_unit` to Windows services (unquoted `ImagePath` with spaces,
+    secrets in the service's `Environment` registry value, and broad write ACEs on the service registry key).
+  - **Client rules and probes (`rules/client.json`, `src/Client.php`):** added `client.psql_history` (checks permissions/ACLs and scans
+    `psql_history` / `.psql_history` for `CREATE/ALTER ROLE … PASSWORD`, connection URIs with passwords and `PGPASSWORD`, without
+    printing values).
+  - **Preliminary framework mappings (`mappings/bsi-app43.json`, `mappings/iso27001-2022.json`, `mappings/cis-postgresql.json`):** a first
+    mapping for BSI IT-Grundschutz Baustein `APP.4.3 Relationale Datenbanken` (`APP.4.3.A1` to `APP.4.3.A25`; it assigns at least one rule
+    to each requirement treated as active — an assignment, not fulfilment; several requirements are organisational and cannot be checked
+    by a tool), a new `mappings/cis-postgresql.json` (an own grouping along sections 1–7 of the CIS PostgreSQL Benchmark with own short
+    titles — the numbers are not CIS identifiers), and every rule assigned in all three. Identifiers of all three are not yet verified
+    against the originals (`"verified": false`, reports say so). CIS Benchmarks is a trademark of the Center for Internet Security;
+    pg-harden is not affiliated with, endorsed or certified by CIS.
+  - **Corrections from review:** `hba.weak_options` reports only the checked option (never other options of the line such as
+    `ldapbindpasswd`/`radiussecret`) and no longer counts `ident` on loopback addresses as network access; `roles.replication_login` only
+    roles that can log in; `tls.ciphers` also single weak suites (`RC4-SHA`, `DES-CBC3-SHA` …); `log.pgaudit` also accepts `pgaudit.log` /
+    `pgaudit.log_role` set per role or database; `code.event_triggers` names the function with schema and arguments.
 
 ## 0.3.2 (2026-10-26)
 

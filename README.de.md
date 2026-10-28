@@ -7,7 +7,7 @@ prüft den Rechner, von dem aus verbunden wird, und führt auf ausdrücklichen B
 und Rückweg aus.
 
 Geprüft werden `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256, schwache Passwörter, Rollen und Rechte, `PUBLIC`-Rechte, `SECURITY DEFINER`-Funktionen,
-Protokollierung und die Betriebssystemseite (Dateirechte, Dienstkonto) von PostgreSQL 14 bis 18 und 19 RC1 — 72 Regeln, ein PHP-Werkzeug
+Protokollierung und die Betriebssystemseite (Dateirechte, Dienstkonto) von PostgreSQL 14 bis 18 und 19 RC1 — 86 Regeln (74 für `check`, 12 für `client`), ein PHP-Werkzeug
 ohne Composer-Abhängigkeiten (PHP 8.3 mit `pdo_pgsql` und `mbstring`). Getestet mit PostgreSQL 14 bis 18 und 19rc1 (Docker, Debian 13) sowie PostgreSQL 18 unter Windows 11
 ([tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)) — die Matrix zeigt Lauffähigkeit und Versionsunterschiede, nicht die Erkennungsgüte der Regeln. Gepflegt von [Frank Glück](https://dozent.net) — Datenbankberater, Entwickler und Dozent. Impressum: <https://dozent.net/informationen/impressum>.
 
@@ -141,7 +141,7 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   Fehler führt zur Wiederherstellung **ohne** Neuladen) → `pg_reload_conf()` → **neue** Anmeldung mit denselben
   Zugangsdaten (bestehende Sitzungen überleben eine kaputte `pg_hba.conf` und beweisen nichts) → bei Misserfolg
   Sicherungen zurück, erneut laden, erneut prüfen.
-- **Dateizugriff als root:** root arbeitet an einem Pfad nur selbst, solange jedes Verzeichnis auf dem Weg root gehört und niemand sonst
+- **Dateizugriff als root bzw. Administrator:** unter Linux/Unix arbeitet root an einem Pfad nur selbst, solange jedes Verzeichnis auf dem Weg root gehört und niemand sonst
   hineinschreiben kann. Ab dem ersten Verzeichnis eines anderen Kontos (meist des Dienstkontos) arbeiten `apply` und `rollback` mit dessen
   Identität und dessen eigenen Gruppen. Das ist so gebaut, dass ein vom Dienstkonto untergeschobener Link oder ein umbenanntes Verzeichnis
   nicht über dessen Rechte hinausreicht, auch wenn dies erst zwischen Prüfung und Schreiben geschieht (Test T14). Lesezugriffe für eine
@@ -149,9 +149,13 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   schreiben können, wird abgewiesen; die Identität für jedes Ziel steht vor der ersten Änderung fest. `postgresql.conf` wird für die Änderung nur
   einmal gelesen; `apply` legt höchstens eine Verzeichnisebene an. Eine Datei von root in einem Verzeichnis des Dienstkontos wird an Ort und
   Stelle geschrieben, wenn das Dienstkonto sie beschreiben darf, sonst abgewiesen. Windows kennt keinen Identitätswechsel:
-  `client --user` liest im Profil des geprüften Kontos keine Datei, deren Weg über eine Junction oder einen symbolischen Link woandershin
-  führt (Meldung „nicht geprüft“; verbleibende Lücken im CHANGELOG); für `check`, `apply` und `rollback` sind Junctions dort noch nicht
-  untersucht. Dateien werden über eine Temp-Datei ersetzt (Windows: erst schreiben, dann
+  dort hält ein Helfer (`WindowsPin`) die Wurzel- und Zielverzeichnisse während der gesamten Dateiphase von `apply` und `rollback` als offene
+  Handles ohne `FILE_SHARE_DELETE` (ein leeres zusätzlich ohne `FILE_SHARE_WRITE`) fest und prüft über diese Handles vor und nach jedem Schreibvorgang, dass jedes
+  Verzeichnis noch ein gewöhnliches Verzeichnis unter seinem endgültigen Pfad ist (`GetFinalPathNameByHandleW`): kein Verzeichnis lässt sich
+  zwischen Prüfung und Schreiben wegbenennen und durch eine Junction ersetzen, und ein an Ort und Stelle verändertes bricht die Operation ab;
+  ohne laufenden Helfer wird nichts geschrieben; ACLs und `postmaster.pid` werden über das offene
+  Handle bzw. mit derselben Wegprüfung gelesen (`client --user` und `check` weisen Wege über Junctions oder symbolische Links ab; verbleibende
+  Grenzen im CHANGELOG). Dateien werden über eine Temp-Datei ersetzt (Windows: erst schreiben, dann
   kürzen), nie vorher geleert. Stirbt der Prozess mitten in der Dateiphase (Fehler, Strg+C, kill), spielt ein Wächter die Sicherungen
   zurück — außerhalb von Windows nur mit den PHP-Erweiterungen `pcntl` und `posix`; fehlen sie, ändert `apply` keine Dateien.
 - **Neuladen:** ein nicht bestätigtes Neuladen zählt als Fehler (der Anmeldetest würde sonst noch die alte Konfiguration sehen).
@@ -250,17 +254,17 @@ GRANT SELECT ON visibility.databases TO PUBLIC;
 ## Betriebssystem-Regeln (Kategorie „Betriebssystem“, `check`)
 
 Nur wenn pg-harden auf dem Server läuft. Der Bericht sagt in der Kopfzeile, ob die Regeln geprüft wurden oder warum nicht
-(Server entfernt oder im Container; `postmaster.pid` nicht lesbar). Geprüft werden Rechte von Datenverzeichnis,
-Konfigurations- und Protokolldateien, TLS-Schlüssel und Socket (Linux: Modi; Windows: ACL gegen Jeder/Benutzer/
-Authentifizierte Benutzer), Dienstkonto, Dienstdatei und Prozessumgebung auf Klartext-Geheimnisse (nur Fundstelle und Name),
+(Server entfernt oder im Container; `postmaster.pid` nicht lesbar). Geprüft werden Rechte von Datenverzeichnis, benutzerdefinierten Tablespaces,
+Konfigurations- (einschließlich per `include`/`include_dir` eingebundener Dateien) und Protokolldateien, TLS-Schlüssel, Ablaufdatum von Server- und CA-Zertifikat sowie Socket (Linux: Modi; Windows: ACL über das offene Handle gegen Jeder/Benutzer/
+Authentifizierte Benutzer), Dienstkonto, Dienstdatei bzw. Windows-Dienst-Registry (auch unquotierter `ImagePath` und Dienst-ACL) und Prozessumgebung auf Klartext-Geheimnisse (nur Fundstelle und Name),
 umask, Log-Verzeichnis auf eigenem Datenträger, freier Platz, Paketherkunft (Linux) bzw. Signatur (Windows).
 
 ## `client` — der Rechner, von dem aus verbunden wird
 
-Keine Datenbankverbindung. Geprüft werden für das aktuelle oder (mit `--user`, Administrator/root nötig) ein anderes Konto:
+Keine Datenbankverbindung (`verify --previous=<client-report.json>` vergleicht auch frühere Client-Berichte). Geprüft werden für das aktuelle oder (mit `--user`, Administrator/root nötig) ein anderes Konto:
 `pg_service.conf` mit `password=`, Passwortdatei (Windows-ACL, Lage in Cloud-Ordnern, auf Netzfreigaben oder in
 Roaming-Profilen, Superuser-Einträge mit Platzhalter-Host, verdeckte Zeilen, fehlende Loopback-Einträge; unter Unix nur als
-Hinweis, weil libpq die Datei bei offenen Rechten ohnehin ignoriert), `PGPASSWORD` in Umgebung und Registry, Passwörter in
+Hinweis, weil libpq die Datei bei offenen Rechten ohnehin ignoriert), `psql`-Befehlshistorie (`psql_history` / `.psql_history` auf Rechte und Klartext-Passwörter), `PGPASSWORD` in Umgebung und Registry, Passwörter in
 Profilen, Skripten, Compose- und `.env`-Dateien, Cron, systemd-Dateien und der Windows-Aufgabenplanung, Client-Schlüssel
 und -Zertifikate (Rechte, Ablauf). Gefundene Geheimnisse erscheinen nur mit Fundstelle und Zeile.
 
@@ -273,18 +277,21 @@ ausgelassen — Dateien in Cloud-Ordnern würden beim Lesen heruntergeladen). We
 
 ## Berichte enthalten Rollen-, Objekt- und Netznamen
 
-Rollennamen sind oft Personenkennungen, `pg_hba`-Zeilen enthalten Netze. Unter Linux und macOS werden Berichte
-und Pläne mit Dateirechten nur für den Eigentümer geschrieben; unter Windows gilt die vererbte Ordner-ACL — dort
-einen geschützten Ordner wählen. Vertraulich ablegen, vor einer Weitergabe an Dritte prüfen, Aufbewahrung
-festlegen.
+Rollennamen sind oft Personenkennungen, `pg_hba`-Zeilen enthalten Netze. Berichte (`--out`), Plan- und Journal-Verzeichnisse werden mit
+Dateirechten nur für das ausführende Konto (unter Windows zusätzlich `SYSTEM` und `Administratoren` per `icacls`) geschrieben. Vertraulich
+ablegen, vor einer Weitergabe an Dritte prüfen, Aufbewahrung festlegen.
 
 ## Regeln und Zuordnungen
 
 - `rules/*.json` — Regeln als Daten: Prüfung per Parameter (`setting`), SQL (`query`, je Befund eine Zeile) oder
   eingebauter Prüfung (`weak_passwords`, `os`, `client`), Version, benötigte Rechte (`requires`), Plattform, Befehl
   (`check`/`client`), Korrektur (`conf`, `sql`, `hba`, `manual`) und Rückweg, Begründung
-- `mappings/*.json` — Zuordnung zu ISO 27001:2022 Annex A (Kennungen noch ungeprüft) und BSI APP.4.3
-  (Platzhalter). Nur Kennungen und Kurztitel in Anlehnung an die Norm, kein Normtext
+- `mappings/*.json` — vorläufige Zuordnung zu BSI IT-Grundschutz Baustein `APP.4.3 Relationale Datenbanken`, ISO/IEC 27001:2022 Annex A
+  und CIS PostgreSQL Benchmark (eigene Gliederung entlang der Abschnitte 1–7, keine CIS-Kennungen); die Kennungen aller drei sind noch
+  ungeprüft. Nur Kennungen
+  und eigene Kurztitel, kein Norm- oder Benchmark-Text; eine Zuordnung sagt, welche Regeln eine Anforderung berühren, nicht, dass sie erfüllt
+  ist. CIS Benchmarks ist eine Marke des Center for Internet Security; pg-harden steht in keiner Verbindung zu CIS und ist von CIS weder
+  empfohlen noch zertifiziert
 
 Das Werkzeug liefert technische Prüfergebnisse, die in einem Audit als Beleg herangezogen werden können. Die
 Zuordnung zeigt nur das Ergebnis der jeweils zugeordneten Regeln — keine Aussage, ob eine Anforderung der Norm
@@ -309,6 +316,9 @@ das Verzeichnis hineinkopieren und als root im Container ausführen. Übungen nu
 ## Tests
 
 `tests/` enthält: `allowlist-test.php` (Unit-Test der Allowlist, die `apply` und `rollback` passieren müssen; `php tests/allowlist-test.php`),
+`catalog-test.php` (Offline-Test für Regelkatalog, Norm-Zuordnungen und `Verifier`), `windows-redirect.php` und `windows-admin-test.ps1`
+(Windows-Wegprüfung, Handle-ACLs und Verzeichnissperre `WindowsPin` gegen Junctions; der zweite, mit einem temporären lokalen Konto in einer
+Administrator-PowerShell, ist noch nicht gelaufen),
 `lab-matrix.sh` (Regressionslauf von `apply`/`rollback` im Container, ruft `lab-identity.php` für die Identitätsregeln beim Schreiben und Lesen als
 root auf), `lab-visibility.sh` und `lab-upgrade.sh` (Katalog-Sichtbarkeit,
 `pg_upgrade`, Wiederherstellung) und `run-version-matrix.sh` mit `matrix-table.php` (Versionsmatrix, Ergebnis in `VERSIONSMATRIX.md`).
@@ -316,6 +326,11 @@ Die Container-Skripte ändern Passwörter, Rollen und Datenbanken und starten nu
 Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
 
 ## Stand
+
+0.4.0 (unveröffentlicht): Windows-Schreibseite hält die Serververzeichnisse gegen einen Tausch gegen Junctions fest über offene Verzeichnis-Handles ohne `FILE_SHARE_DELETE` (`WindowsPin`), ACL-Lesen über das
+offene Datei-Handle (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), enge ACLs für Journale und Ausgabedateien unter Windows (beim Laden eines Journals geprüft), `verify` auch für
+Client-Berichte, Regelkatalog auf 86 Regeln erweitert (74 für `check`, 12 für `client`), vorläufige Zuordnungen zu BSI IT-Grundschutz `APP.4.3`
+und CIS PostgreSQL Benchmark ergänzt. Einzelheiten in [CHANGELOG.md](CHANGELOG.md) (englisch).
 
 0.3.2 (26.10.2026): **Sicherheitskorrektur** für `check` und `client` als root (ein anderes Konto konnte sie über einen Link eine Datei
 von root lesen lassen, die Prozessprüfungen über `postmaster.pid` auf einen fremden Prozess lenken oder `check` mit einer FIFO anhalten);

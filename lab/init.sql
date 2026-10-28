@@ -20,8 +20,9 @@ CREATE ROLE data_team NOLOGIN;
 GRANT pg_execute_server_program TO data_team;
 CREATE ROLE analyst LOGIN PASSWORD 'analyst' IN ROLE data_team;
 
--- Wartungsrolle, die Row-Level Security umgeht
+-- Wartungsrolle, die Row-Level Security umgeht, und Benutzerverwaltung mit CREATEROLE
 CREATE ROLE support_team LOGIN BYPASSRLS PASSWORD 'support';
+CREATE ROLE user_admin LOGIN CREATEROLE PASSWORD 'user_admin_123';
 
 -- Verwaister Replikations-Slot eines abgebauten Standbys
 SELECT pg_create_physical_replication_slot('old_standby', true);
@@ -48,6 +49,13 @@ CREATE DATABASE shop;
 GRANT CREATE ON SCHEMA public TO PUBLIC;
 
 CREATE TABLE public.customer (id bigint PRIMARY KEY, name text, iban text);
+
+-- Tabelle mit aktivierter Row-Level Security, aber vergessener Policy (sperrt Nicht-Eigentümer still aus)
+CREATE TABLE public.invoice (id bigint PRIMARY KEY, customer_id bigint, amount numeric(12,2));
+ALTER TABLE public.invoice ENABLE ROW LEVEL SECURITY;
+
+-- Standard-Privilegien für künftige Tabellen an PUBLIC vergeben
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC;
 
 -- SECURITY DEFINER ohne festen search_path
 CREATE FUNCTION public.customer_count() RETURNS bigint

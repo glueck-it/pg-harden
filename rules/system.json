@@ -46,6 +46,34 @@
       "remediation": "chmod 0600 <ssl_key_file> (Linux), allgemeine Gruppen aus der ACL entfernen (Windows); Schlüssel erneuern, falls er lesbar war."
     },
     {
+      "id": "os.ssl_cert_expiry",
+      "title": "Server- und CA-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab",
+      "category": "Betriebssystem",
+      "severity": "medium",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "requires": "local",
+      "check": { "type": "os", "probe": "ssl_cert_expiry" },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein abgelaufenes Serverzertifikat lässt Verbindungen mit sslmode=verify-ca oder verify-full scheitern; eine abgelaufene Client-CA (ssl_ca_file) sperrt die Zertifikatsanmeldung.",
+      "remediation": "Zertifikat rechtzeitig erneuern, mit SELECT pg_reload_conf() aktivieren und die Restlaufzeit überwachen."
+    },
+    {
+      "id": "os.tablespace_permissions",
+      "title": "Verzeichnisse benutzerdefinierter Tablespaces sind nur für das Dienstkonto zugänglich",
+      "category": "Betriebssystem",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "local",
+      "check": { "type": "os", "probe": "tablespace_permissions" },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein Tablespace außerhalb des Datenverzeichnisses enthält Tabellendateien und Indizes im selben Format wie base/. Zu offene Rechte dort umgehen den Schutz des Datenverzeichnisses vollständig.",
+      "remediation": "chmod 0700 und Besitzer Dienstkonto (Linux) bzw. allgemeine Gruppen aus der ACL entfernen (Windows)."
+    },
+    {
       "id": "os.log_permissions",
       "title": "Protokolldateien sind nicht für alle Benutzer des Systems lesbar",
       "category": "Betriebssystem",
@@ -105,19 +133,18 @@
     },
     {
       "id": "os.service_unit",
-      "title": "Dienstdatei und Prozessumgebung enthalten keine Klartext-Geheimnisse",
+      "title": "Dienstkonfiguration und Prozessumgebung sind geschützt und enthalten keine Klartext-Geheimnisse",
       "category": "Betriebssystem",
       "severity": "medium",
       "goal": "Vertraulichkeit",
       "scope": "cluster",
       "legal_notice": true,
       "requires": "local",
-      "platform": ["linux"],
       "check": { "type": "os", "probe": "service_unit" },
       "fix": { "type": "manual" },
       "automation": "manual",
-      "rationale": "Passwörter in Environment= der systemd-Dienstdatei oder in PGPASSWORD der Serverumgebung stehen für jeden lesbar in Dateien bzw. im Prozessabbild. Eine beschreibbare Dienstdatei lässt Befehle mit den Rechten des Dienstes ausführen. Ausgegeben werden nur Fundstelle und Name, nie der Wert.",
-      "remediation": "Geheimnisse aus der Dienstdatei entfernen (Passwortdatei mit 0600, systemd-Credentials), Dienstdatei nur für root beschreibbar, kein User=root."
+      "rationale": "Passwörter in Environment= der systemd-Dienstdatei, im Registry-Wert Environment des Windows-Dienstes oder in PGPASSWORD der Serverumgebung stehen für jeden Berechtigten lesbar in Dateien, der Registry bzw. im Prozessabbild. Eine beschreibbare Dienstdatei, ein für allgemeine Gruppen beschreibbarer Dienstschlüssel in der Registry oder ein Dienstpfad mit Leerzeichen ohne Anführungszeichen (ImagePath) lässt Befehle mit den Rechten des Dienstes ausführen. Ausgegeben werden nur Fundstelle und Name, nie der Wert.",
+      "remediation": "Geheimnisse aus Dienstdatei bzw. Registry entfernen (Passwortdatei mit 0600, systemd-Credentials), Dienstdatei und Dienstschlüssel nur für Administratoren beschreibbar halten, ImagePath in Anführungszeichen setzen, kein User=root."
     },
     {
       "id": "os.log_own_volume",

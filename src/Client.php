@@ -16,7 +16,7 @@ declare(strict_types=1);
 final class ClientContext
 {
   /** @param string[] $extraScanDirs */
-  private function __construct(
+  public function __construct(
     public readonly string $account,
     public readonly string $home,
     public readonly ?string $appData,
@@ -272,7 +272,7 @@ final class ClientProbes
 {
   public const NAMES = [
     'service_file_password', 'pgpass_acl', 'pgpass_mode', 'pgpass_location', 'pgpass_superuser', 'pgpass_shadowed',
-    'pgpass_loopback', 'env_pgpassword', 'secrets_in_files', 'cert_key_permissions', 'cert_expiry',
+    'pgpass_loopback', 'env_pgpassword', 'secrets_in_files', 'cert_key_permissions', 'cert_expiry', 'psql_history',
   ];
 
   /** Principals that may read a password file on Windows: owner (the account itself), SYSTEM, Administrators, CREATOR OWNER. */
@@ -282,8 +282,7 @@ final class ClientProbes
   public const REDIRECTED = 'Weg im Profil über Junction/symbolischen Link bzw. nicht auflösbar';
 
   private static ?array $facts = null;
-  /** @var array<string, true> files whose way was already redirected before the PowerShell run collected their ACLs */
-  private static array $factsRedirected = [];
+  private static ?string $factsKey = null;
   private static ?SecretScan $scan = null;
 
   /** @return array{findings: array[], unchecked: string[], notes: string[]} */
@@ -302,6 +301,7 @@ final class ClientProbes
       'secrets_in_files' => self::secretsInFiles($c, $r),
       'cert_key_permissions' => self::certKeyPermissions($c, $r),
       'cert_expiry' => self::certExpiry($c, $r),
+      'psql_history' => self::psqlHistory($c, $r),
     };
     return $r;
   }
@@ -359,36 +359,41 @@ final class ClientProbes
     return $files;
   }
 
+  private static function psqlHistoryFiles(ClientContext $c): array
+  {
+    $files = [];
+    if ($c->isSelf && ($env = getenv('PSQL_HISTORY')) !== false && $env !== '') {
+      $files[] = $env;
+    }
+    if (Platform::windows()) {
+      $files[] = ($c->appData ?? $c->home) . '\\postgresql\\psql_history';
+      $files[] = $c->home . '\\.psql_history';
+    } else {
+      $files[] = $c->home . '/.psql_history';
+    }
+    return array_values(array_filter(array_unique($files), fn($f) => Fs::attempt(fn() => is_file($f)) === true));
+  }
+
   // ── Windows facts (one PowerShell run) ───────────────────────────────────
 
   private static function windowsFacts(ClientContext $c): array
   {
-    if (self::$facts !== null) {
+    $paths = array_values(array_unique(array_merge(
+      [self::pgpassFile($c)], self::serviceFiles($c), self::psqlHistoryFiles($c), ...array_values(self::certFiles($c)),
+    )));
+    $key = $c->home . "\0" . ($c->appData ?? '') . "\0" . implode("\0", $paths);
+    if (self::$facts !== null && self::$factsKey === $key) {
       return self::$facts;
     }
-    $paths = array_values(array_unique(array_merge(
-      [self::pgpassFile($c)], self::serviceFiles($c), ...array_values(self::certFiles($c)),
-    )));
-    // Get-Acl follows a junction: checked before the run here and once more in aclProblems after it.
-    if (($base = $c->guardBase()) !== null) {
-      self::$factsRedirected = array_fill_keys(array_filter($paths, fn($p) => Fs::windowsRedirected($p, $base)), true);
-    }
-    $script = <<<'PS'
+    self::$factsKey = $key;
+    // Each file is opened once and both its final path (GetFinalPathNameByHandle) and its ACL (GetSecurityInfo) are read from that handle.
+    $script = Platform::WIN_HANDLE_PS . "\n" . <<<'PS'
       $res = @{ env = @{ user = $false; machine = $false }; acls = @(); tasks = @() }
       try { $res.env.user = [bool][Environment]::GetEnvironmentVariable('PGPASSWORD', 'User') } catch {}
       try { $res.env.machine = [bool][Environment]::GetEnvironmentVariable('PGPASSWORD', 'Machine') } catch {}
       foreach ($path in @($d.paths)) {
         try {
-          $acl = Get-Acl -LiteralPath $path
-          $aces = @()
-          foreach ($a in $acl.Access) {
-            $sid = ''
-            try { $sid = $a.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-            $aces += @{ sid = $sid; name = [string]$a.IdentityReference.Value; rights = [string]$a.FileSystemRights; type = [string]$a.AccessControlType }
-          }
-          $ownerSid = ''
-          try { $ownerSid = (New-Object Security.Principal.NTAccount($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value } catch {}
-          $res.acls += @{ path = $path; owner = $ownerSid; aces = $aces }
+          $res.acls += (Read-HandleAcl ([string]$path))
         } catch { $res.acls += @{ path = $path; error = $_.Exception.Message } }
       }
       try {
@@ -418,19 +423,20 @@ final class ClientProbes
   /** Windows: findings for principals outside the allowed set that can reach the file. */
   private static function aclProblems(ClientContext $c, string $path, array &$r, string $what): void
   {
-    // The ACL behind a junction belongs to another file: reporting it would attribute that file's access to this account. Checked
-    // before and after the PowerShell run; a swap in and back out while it runs is not caught (Get-Acl takes the path, no handle).
+    // The ACL is read from the opened handle itself (GetSecurityInfo); if that handle's final path leads outside the examined
+    // account's profile through a junction or link, its ACL belongs to another file and is not reported as this account's.
     $facts = self::windowsFacts($c);
-    if (($base = $c->guardBase()) !== null && (isset(self::$factsRedirected[$path]) || Fs::windowsRedirected($path, $base))) {
-      $r['unchecked'][] = Text::printable($path) . ': ' . self::REDIRECTED . ' — ACL nicht geprüft';
-      return;
-    }
+    $base = $c->guardBase();
     foreach ($facts['acls'] ?? [] as $acl) {
       if (($acl['path'] ?? null) !== $path) {
         continue;
       }
-      if (isset($acl['error'])) {
-        $r['unchecked'][] = Text::printable($path) . ': ACL nicht lesbar';
+      if (isset($acl['error']) || !is_string($acl['final'] ?? null)) {
+        $r['unchecked'][] = Text::printable($path) . ': ' . ($base !== null && Fs::windowsRedirected($path, $base) ? self::REDIRECTED . ' — ACL nicht geprüft' : 'ACL nicht lesbar');
+        return;
+      }
+      if ($base !== null && Fs::windowsRedirected($path, $base, $acl['final'])) {
+        $r['unchecked'][] = Text::printable($path) . ': ' . self::REDIRECTED . ' — ACL nicht geprüft';
         return;
       }
       // The account itself (profile owner), the file owner, SYSTEM and Administrators may reach the file.
@@ -788,6 +794,49 @@ final class ClientProbes
         self::finding($r, $file, "Zertifikat läuft in $left Tagen ab");
       } else {
         $r['notes'][] = Text::printable(basename($file)) . ": noch $left Tage gültig";
+      }
+    }
+  }
+
+  // ── psql history ─────────────────────────────────────────────────────────
+
+  private static function psqlHistory(ClientContext $c, array &$r): void
+  {
+    $files = self::psqlHistoryFiles($c);
+    if ($files === []) {
+      $r['notes'][] = 'Keine psql-Historie gefunden';
+      return;
+    }
+    $patterns = [
+      'CREATE/ALTER ROLE … PASSWORD in Historie' => '/\b(?:CREATE|ALTER)\s+(?:ROLE|USER)\b[^\n;]*\bPASSWORD\s+(?:\'|\$[A-Za-z0-9_]*\$)/i',
+      'Passwort in Verbindungs-URI' => '~postgres(?:ql)?://[^\s:@/]+:[^\s@/]+@~i',
+      'setzt PGPASSWORD' => '/\bPGPASSWORD\b\s*[=:]/i',
+    ];
+    foreach ($files as $file) {
+      if (Platform::windows()) {
+        self::aclProblems($c, $file, $r, 'psql-Historie');
+      } else {
+        $st = Fs::attempt(fn() => stat($file));
+        if ($st === null) {
+          $r['unchecked'][] = Text::printable($file) . ': nicht lesbar';
+          continue;
+        }
+        if (($st['mode'] & 0077) !== 0) {
+          self::finding($r, $file, 'psql-Historie für Gruppe oder andere zugänglich (Modus ' . self::mode($st['mode']) . '; erwartet 0600)');
+        }
+      }
+      $content = Fs::readGuarded($file, 5242880, $c->guardBase());
+      if ($content === null) {
+        $r['unchecked'][] = Text::printable($file) . ': ' . self::unreadable($c, 'nicht lesbar', 'größer als 5 MiB');
+        continue;
+      }
+      foreach (preg_split('/\r\n|\n|\r/', $content) as $i => $line) {
+        foreach ($patterns as $kind => $regex) {
+          if (preg_match($regex, $line) === 1) {
+            self::finding($r, $file . ':' . ($i + 1), $kind . ' (Wert wird nicht ausgegeben)');
+            break;
+          }
+        }
       }
     }
   }

@@ -2,6 +2,27 @@
   "framework": "BSI IT-Grundschutz, Baustein APP.4.3 Relationale Datenbanken (Kompendium 2023)",
   "short": "BSI APP.4.3",
   "verified": false,
-  "note": "Platzhalter: Anforderungsnummern erst nach Abgleich mit dem BSI-Original eintragen, nicht aus dem Gedächtnis. Grundschutz++ (OSCAL) prüfen.",
-  "controls": {}
+  "note": "Nur Kennungen und eigene Kurztitel in Anlehnung an den Baustein APP.4.3, kein Originaltext. Kennungen, Titel und die als entfallen behandelten Anforderungen (A2, A5, A10, A14, A15) vor Freigabe gegen das BSI-Original prüfen.",
+  "controls": {
+    "APP.4.3.A1": { "title": "Sicherheitsrichtlinie und Rollen-/Rechtekonzept", "rules": ["roles.extra_superusers", "roles.server_file_access", "roles.replication_login", "roles.bypassrls", "roles.createrole", "roles.createrole_self_grant", "db.public_schema_create", "db.public_temp", "db.public_connect", "db.catalog_visibility", "db.default_acl_public", "db.rls_policies_inactive"] },
+    "APP.4.3.A3": { "title": "Basishärtung des DBMS", "rules": ["net.listen_addresses", "hba.open_to_all", "hba.superuser_remote", "code.untrusted_languages", "code.lo_compat_privileges", "code.extensions", "code.preload_libraries", "os.pgdata_permissions", "os.tablespace_permissions", "os.config_permissions", "os.socket_permissions", "os.umask", "os.service_account", "os.service_unit"] },
+    "APP.4.3.A4": { "title": "Geregeltes Anlegen neuer Datenbanken", "rules": ["db.public_schema_create", "db.public_temp", "db.public_connect", "db.catalog_visibility", "db.default_acl_public"] },
+    "APP.4.3.A6": { "title": "Passwortänderung und Authentisierung", "rules": ["auth.password_encryption", "auth.md5_passwords", "auth.passwordless_or_expired", "auth.weak_passwords", "auth.authentication_timeout", "auth.auth_delay", "auth.password_policy", "hba.trust", "hba.cleartext_password", "hba.md5_method", "hba.weak_options", "hba.superuser_remote", "client.service_file_password", "client.pgpass_acl", "client.pgpass_mode", "client.pgpass_location", "client.pgpass_superuser", "client.pgpass_shadowed", "client.pgpass_loopback", "client.env_pgpassword", "client.secrets_in_files", "client.psql_history"] },
+    "APP.4.3.A7": { "title": "Zeitnahes Einspielen von Sicherheitsupdates", "rules": ["patch.supported_major", "patch.catalog_current", "os.package_source"] },
+    "APP.4.3.A8": { "title": "Datenbank-Protokollierung", "rules": ["log.collector", "log.connections", "log.disconnections", "log.line_prefix", "log.statement_ddl", "log.pgaudit", "log.lock_waits", "log.parameter_length", "log.debug_print", "log.file_mode", "log.directory_outside_pgdata", "os.log_permissions", "os.log_own_volume"] },
+    "APP.4.3.A9": { "title": "Datensicherung eines Datenbanksystems", "rules": ["avail.archive_enabled", "avail.archiver_failing", "data.checksums", "data.crash_safety"] },
+    "APP.4.3.A11": { "title": "Ausreichende Dimensionierung und Kapazität", "rules": ["avail.temp_file_limit", "avail.slot_wal_keep", "avail.inactive_slots", "sess.idle_in_transaction", "log.directory_outside_pgdata", "os.log_own_volume", "os.disk_free"] },
+    "APP.4.3.A12": { "title": "Einheitlicher Konfigurationsstandard", "rules": ["conf.role_db_overrides", "roles.allow_alter_system", "hba.errors", "data.crash_safety", "os.config_permissions"] },
+    "APP.4.3.A13": { "title": "Restriktive Handhabung von Datenbank-Links", "rules": ["code.fdw_secrets", "code.extensions"] },
+    "APP.4.3.A16": { "title": "Verschlüsselung der Datenbankanbindung", "rules": ["tls.ssl_enabled", "tls.min_protocol", "tls.ciphers", "hba.host_without_tls", "os.ssl_key_permissions", "os.ssl_cert_expiry", "client.cert_key_permissions", "client.cert_expiry"] },
+    "APP.4.3.A17": { "title": "Datenübernahme oder Migration (Integrität)", "rules": ["data.checksums", "data.crash_safety"] },
+    "APP.4.3.A18": { "title": "Überwachung des Datenbankmanagementsystems", "rules": ["avail.archiver_failing", "avail.inactive_slots", "log.lock_waits", "os.disk_free", "os.ssl_cert_expiry", "client.cert_expiry"] },
+    "APP.4.3.A19": { "title": "Schutz vor schädlichen Datenbank-Skripten", "rules": ["code.secdef_search_path", "code.untrusted_languages", "code.event_triggers", "db.public_schema_create", "db.default_acl_public"] },
+    "APP.4.3.A20": { "title": "Regelmäßige Audits", "rules": ["code.extensions", "code.preload_libraries", "code.event_triggers", "conf.role_db_overrides", "log.pgaudit"] },
+    "APP.4.3.A21": { "title": "Einsatz von Datenbank-Sicherheitswerkzeugen (H)", "rules": ["auth.auth_delay", "auth.password_policy", "log.pgaudit"] },
+    "APP.4.3.A22": { "title": "Notfallvorsorge (H)", "rules": ["avail.archive_enabled", "avail.archiver_failing", "data.checksums", "data.crash_safety"] },
+    "APP.4.3.A23": { "title": "Archivierung (H)", "rules": ["avail.archive_enabled", "avail.archiver_failing", "data.checksums"] },
+    "APP.4.3.A24": { "title": "Datenverschlüsselung in der Datenbank (H)", "rules": ["code.extensions", "os.pgdata_permissions", "os.tablespace_permissions"] },
+    "APP.4.3.A25": { "title": "Sicherheitsprüfungen von Datenbanksystemen (H)", "rules": ["patch.supported_major", "conf.role_db_overrides", "hba.errors", "os.service_unit", "client.secrets_in_files"] }
+  }
 }

@@ -1,0 +1,32 @@
+{
+  "framework": "CIS PostgreSQL Benchmark (eigene Gliederung in Anlehnung an die Abschnitte 1–7)",
+  "short": "CIS PostgreSQL",
+  "verified": false,
+  "note": "Eigene Gliederung mit eigenen deutschen Kurztiteln in Anlehnung an die Abschnitte 1–7 des Benchmarks: die Nummern sind keine CIS-Kennungen, kein Originaltext. Zuordnung vor Verwendung gegen die eingesetzte Benchmark-Fassung prüfen. CIS Benchmarks ist eine Marke des Center for Internet Security; keine Verbindung, Empfehlung oder Zertifizierung durch CIS.",
+  "controls": {
+    "1.1": { "title": "Bezug aus vertrauenswürdiger Paketquelle", "rules": ["os.package_source"] },
+    "1.2": { "title": "Dedizierter Systemdienst und Dienstkonto", "rules": ["os.service_account", "os.service_unit"] },
+    "1.3": { "title": "Datencluster mit Datenprüfsummen initialisiert", "rules": ["data.checksums"] },
+    "1.4": { "title": "Unterstützte Haupt- und Nebenversion im Einsatz", "rules": ["patch.supported_major", "patch.catalog_current"] },
+    "2.1": { "title": "Dateierstellungsmaske (umask) und Verzeichnisrechte des Dienstes", "rules": ["os.umask", "os.pgdata_permissions", "os.tablespace_permissions", "os.config_permissions"] },
+    "2.2": { "title": "Zugriffsrechte auf Unix-Domain-Sockets", "rules": ["os.socket_permissions"] },
+    "3.1": { "title": "Protokollsammler, Zielverzeichnis und Dateimodus", "rules": ["log.collector", "log.directory_outside_pgdata", "log.file_mode", "os.log_permissions", "os.log_own_volume"] },
+    "3.2": { "title": "Protokollierung von Verbindungen, Trennungen und Sitzungspräfix", "rules": ["log.connections", "log.disconnections", "log.line_prefix"] },
+    "3.3": { "title": "Protokollierung von Schemaänderungen, Sperr-Wartezeiten und Parametern", "rules": ["log.statement_ddl", "log.lock_waits", "log.parameter_length"] },
+    "3.4": { "title": "Keine Debug-Ausgaben von internen Strukturen im Serverprotokoll", "rules": ["log.debug_print"] },
+    "3.5": { "title": "Erweiterte Audit-Protokollierung (pgaudit)", "rules": ["log.pgaudit"] },
+    "4.1": { "title": "Begrenzung von Superuser-, System- und Rollenverwaltungsrechten", "rules": ["roles.extra_superusers", "roles.server_file_access", "roles.createrole", "roles.createrole_self_grant", "roles.bypassrls", "os.service_account"] },
+    "4.2": { "title": "Passwortlebensdauer, Passwortstärke und Passwortrichtlinie", "rules": ["auth.passwordless_or_expired", "auth.weak_passwords", "auth.password_policy"] },
+    "4.3": { "title": "Einschränkung der Rechte von PUBLIC auf Datenbanken und Schemas", "rules": ["db.public_schema_create", "db.public_temp", "db.public_connect", "db.catalog_visibility", "db.default_acl_public"] },
+    "4.4": { "title": "Zeilensicherheit (RLS) und sichere SECURITY-DEFINER-Funktionen", "rules": ["db.rls_policies_inactive", "roles.bypassrls", "code.secdef_search_path"] },
+    "5.1": { "title": "Anmeldung über lokalen Socket und Netzwerk (pg_hba.conf)", "rules": ["hba.trust", "hba.cleartext_password", "hba.md5_method", "hba.open_to_all", "hba.superuser_remote", "hba.weak_options", "hba.errors"] },
+    "5.2": { "title": "Sichere Passwortdateien und Anmeldeumgebung auf dem Client", "rules": ["client.pgpass_acl", "client.pgpass_mode", "client.pgpass_location", "client.pgpass_superuser", "client.pgpass_shadowed", "client.pgpass_loopback", "client.service_file_password", "client.env_pgpassword", "client.secrets_in_files", "client.psql_history"] },
+    "6.1": { "title": "Lauschadressen und Verbindungszeitgrenzen", "rules": ["net.listen_addresses", "auth.authentication_timeout", "auth.auth_delay", "sess.idle_in_transaction"] },
+    "6.2": { "title": "Backend-Parameter, Laufzeit-Overrides und ALTER SYSTEM", "rules": ["roles.allow_alter_system", "conf.role_db_overrides", "data.crash_safety", "avail.temp_file_limit", "os.disk_free"] },
+    "6.3": { "title": "Vorab geladene Bibliotheken, Erweiterungen, Sprachen und Trigger", "rules": ["code.preload_libraries", "code.extensions", "code.untrusted_languages", "code.lo_compat_privileges", "code.event_triggers"] },
+    "6.4": { "title": "TLS-Konfiguration, Schlüsselrechte und Zertifikatslaufzeit", "rules": ["tls.ssl_enabled", "tls.min_protocol", "tls.ciphers", "hba.host_without_tls", "os.ssl_key_permissions", "os.ssl_cert_expiry", "client.cert_key_permissions", "client.cert_expiry"] },
+    "6.5": { "title": "Kryptografische Passwortspeicherung (SCRAM-SHA-256)", "rules": ["auth.password_encryption", "auth.md5_passwords"] },
+    "7.1": { "title": "Replikationskonten, WAL-Archivierung und Replikations-Slots", "rules": ["roles.replication_login", "avail.archive_enabled", "avail.archiver_failing", "avail.slot_wal_keep", "avail.inactive_slots"] },
+    "7.2": { "title": "Geheimnisschutz bei Foreign Data Wrappern und logischer Replikation", "rules": ["code.fdw_secrets"] }
+  }
+}

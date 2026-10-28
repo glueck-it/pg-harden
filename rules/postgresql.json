@@ -44,7 +44,7 @@
       "scope": "cluster",
       "check": {
         "type": "query",
-        "sql": "SELECT coalesce('Rolle ' || r.rolname, 'alle Rollen') || ' / ' || coalesce('Datenbank ' || d.datname, 'alle Datenbanken') AS object, cfg AS detail FROM pg_db_role_setting s LEFT JOIN pg_database d ON d.oid = s.setdatabase LEFT JOIN pg_roles r ON r.oid = s.setrole CROSS JOIN LATERAL unnest(s.setconfig) AS cfg WHERE split_part(cfg, '=', 1) IN ('password_encryption', 'log_connections', 'log_disconnections', 'log_statement', 'log_line_prefix', 'log_parameter_max_length', 'lo_compat_privileges', 'row_security', 'idle_in_transaction_session_timeout', 'temp_file_limit', 'statement_timeout', 'pgaudit.log', 'pgaudit.log_relation') ORDER BY 1, 2"
+        "sql": "SELECT coalesce('Rolle ' || r.rolname, 'alle Rollen') || ' / ' || coalesce('Datenbank ' || d.datname, 'alle Datenbanken') AS object, cfg AS detail FROM pg_db_role_setting s LEFT JOIN pg_database d ON d.oid = s.setdatabase LEFT JOIN pg_roles r ON r.oid = s.setrole CROSS JOIN LATERAL unnest(s.setconfig) AS cfg WHERE split_part(cfg, '=', 1) IN ('password_encryption', 'log_connections', 'log_disconnections', 'log_statement', 'log_line_prefix', 'log_parameter_max_length', 'log_min_messages', 'log_min_error_statement', 'log_error_verbosity', 'log_lock_waits', 'lo_compat_privileges', 'row_security', 'search_path', 'session_preload_libraries', 'local_preload_libraries', 'shared_preload_libraries', 'ssl_min_protocol_version', 'fsync', 'full_page_writes', 'ignore_checksum_failure', 'zero_damaged_pages', 'createrole_self_grant', 'idle_in_transaction_session_timeout', 'temp_file_limit', 'statement_timeout', 'pgaudit.log', 'pgaudit.log_relation', 'pgaudit.log_role') ORDER BY 1, 2"
       },
       "fix": { "type": "manual" },
       "automation": "manual",
@@ -93,6 +93,22 @@
       "automation": "confirm",
       "rationale": "TLS 1.0 und 1.1 gelten als unsicher.",
       "remediation": "ssl_min_protocol_version = 'TLSv1.2'; 'TLSv1.3', wenn alle Clients es können. Alte Clients vorher prüfen."
+    },
+    {
+      "id": "tls.ciphers",
+      "title": "Keine schwachen TLS-Chiffren und Server-Präferenz aktiv",
+      "category": "Netzwerk und TLS",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'ssl_ciphers' AS object, current_setting('ssl_ciphers') AS detail WHERE EXISTS (SELECT 1 FROM regexp_split_to_table(current_setting('ssl_ciphers'), '[: ,]+') AS tok WHERE tok <> '' AND tok !~ '^[!-]' AND (upper(ltrim(tok, '+')) IN ('NULL', 'ENULL', 'ANULL', 'ANON', 'ADH', 'AECDH', 'EXPORT', 'EXP', 'LOW', 'DES', 'RC4', 'MD5') OR upper(ltrim(tok, '+')) ~ '(^|-)(NULL|ADH|AECDH|EXP|EXPORT|DES|RC4|MD5|ANON)(-|$)')) UNION ALL SELECT 'ssl_prefer_server_ciphers' AS object, 'off' AS detail WHERE current_setting('ssl_prefer_server_ciphers') = 'off'"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Schwache Chiffrenklassen (NULL, aNULL, EXPORT, LOW, DES, RC4, MD5) und einzeln genannte Suiten mit diesen Bausteinen (z. B. RC4-SHA, DES-CBC3-SHA) untergraben die Transportverschlüsselung unter TLS 1.2; bei ausgeschalteter Server-Präferenz bestimmt der Client die Reihenfolge.",
+      "remediation": "ssl_ciphers = 'HIGH:!aNULL:!MD5' (oder enger nach Vorgabe, z. B. BSI TR-02102-2) und ssl_prefer_server_ciphers = on setzen."
     },
     {
       "id": "hba.errors",
@@ -157,6 +173,23 @@
       "automation": "manual",
       "rationale": "Ein vorhandener MD5-Hash bleibt bestehen, bis das Passwort neu gesetzt wird.",
       "remediation": "Passwort je Rolle neu setzen (psql: \\password <rolle>), nachdem password_encryption auf scram-sha-256 steht."
+    },
+    {
+      "id": "auth.passwordless_or_expired",
+      "title": "Anmeldefähige Rollen haben ein gültiges Passwort hinterlegt",
+      "category": "Authentifizierung",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "superuser",
+      "check": {
+        "type": "query",
+        "sql": "SELECT rolname AS object, CASE WHEN rolpassword IS NULL AND rolvaliduntil IS NOT NULL AND rolvaliduntil < now() THEN 'kein Passwort hinterlegt und Gültigkeit abgelaufen (' || to_char(rolvaliduntil, 'DD.MM.YYYY') || ')' WHEN rolpassword IS NULL THEN 'kein Passwort hinterlegt (Anmeldung über peer/cert/GSSAPI oder pg_hba.conf prüfen)' ELSE 'Passwort-Gültigkeit abgelaufen am ' || to_char(rolvaliduntil, 'DD.MM.YYYY') END AS detail FROM pg_authid WHERE rolcanlogin AND oid <> 10 AND (rolpassword IS NULL OR (rolvaliduntil IS NOT NULL AND rolvaliduntil < now())) ORDER BY rolname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Rollen mit LOGIN ohne Passwort sind entweder auf Zertifikats-, Peer- oder GSSAPI-Anmeldung angewiesen oder bei zu offener pg_hba.conf ungeschützt — der Befund ist dann zu sichten, nicht zwingend ein Fehler. Ein abgelaufenes VALID UNTIL sperrt nur die Passwort-Anmeldung; über cert, peer, GSSAPI oder trust bleibt das Konto anmeldefähig, und es kann auf ein verwaistes Konto hindeuten. Ausgenommen ist der Bootstrap-Superuser (OID 10), der bei lokaler peer-Anmeldung üblicherweise kein Passwort hat.",
+      "remediation": "Für Passwort-Konten ein SCRAM-Passwort setzen; bei Zertifikats-/GSSAPI-Konten sicherstellen, dass pg_hba.conf für sie keine Passwort- oder trust-Methode zulässt; nicht mehr benötigten Konten NOLOGIN setzen."
     },
     {
       "id": "auth.weak_passwords",
@@ -259,6 +292,23 @@
       "remediation": "Superuser nur lokal zulassen; davor eine reject-Zeile für Superuser über das Netz setzen. 'all' durch konkrete Rollen ersetzen."
     },
     {
+      "id": "hba.weak_options",
+      "title": "Keine ident-Anmeldung über das Netz und kein clientcert=verify-ca ohne Namensabgleich",
+      "category": "Authentifizierung",
+      "severity": "medium",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "requires": "hba",
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || ' ' || auth_method || CASE WHEN verify_ca THEN ' (clientcert=verify-ca)' ELSE '' END AS detail FROM (SELECT f.*, EXISTS (SELECT 1 FROM unnest(coalesce(f.options, ARRAY[]::text[])) AS o WHERE lower(trim(o)) = 'clientcert=verify-ca') AS verify_ca FROM pg_hba_file_rules f WHERE f.error IS NULL) h WHERE (type LIKE 'host%' AND auth_method = 'ident' AND NOT (coalesce(address, '') ~ '^127\\.' OR address IN ('::1', 'samehost', 'localhost'))) OR verify_ca ORDER BY line_number"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Die Methode ident über TCP vertraut dem ident-Dienst des Client-Rechners, den jeder mit dortigen Administratorrechten frei beantworten kann. Die Option clientcert=verify-ca prüft nur, ob das Zertifikat von der CA unterschrieben ist, nicht aber, ob sein Name (CN/SAN) zur angemeldeten Rolle passt.",
+      "remediation": "ident über das Netz durch scram-sha-256, cert oder gss ersetzen (lokal auf Unix-Sockets peer nutzen); clientcert=verify-ca durch clientcert=verify-full ersetzen."
+    },
+    {
       "id": "auth.authentication_timeout",
       "title": "Anmeldevorgang ist zeitlich begrenzt (höchstens 60 Sekunden)",
       "category": "Authentifizierung",
@@ -321,19 +371,35 @@
     },
     {
       "id": "roles.server_file_access",
-      "title": "Kein Nicht-Superuser hat Zugriff auf Serverdateien oder -programme",
+      "title": "Kein Nicht-Superuser hat Zugriff auf Serverdateien, -programme oder alle Tabellen",
       "category": "Rollen und Rechte",
       "severity": "high",
       "goal": "Integrität",
       "scope": "cluster",
       "check": {
         "type": "query",
-        "sql": "SELECT r.rolname AS object, 'Mitglied (auch über Gruppen) von ' || g.rolname AS detail FROM pg_roles r CROSS JOIN pg_roles g WHERE g.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files') AND r.oid <> g.oid AND NOT r.rolsuper AND r.rolname !~ '^pg_' AND pg_has_role(r.oid, g.oid, 'MEMBER') ORDER BY 1, 2"
+        "sql": "SELECT r.rolname AS object, 'Mitglied (auch über Gruppen) von ' || g.rolname AS detail FROM pg_roles r CROSS JOIN pg_roles g WHERE g.rolname IN ('pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files', 'pg_read_all_data', 'pg_write_all_data') AND r.oid <> g.oid AND NOT r.rolsuper AND r.rolname !~ '^pg_' AND pg_has_role(r.oid, g.oid, 'MEMBER') ORDER BY 1, 2"
       },
       "fix": { "type": "manual" },
       "automation": "manual",
-      "rationale": "Diese Rollen erlauben COPY … PROGRAM bzw. Dateizugriff mit den Rechten des Dienstkontos — praktisch Superuser.",
-      "remediation": "Mitgliedschaft entziehen; Datenimport über clientseitiges \\copy abwickeln."
+      "rationale": "pg_execute_server_program, pg_read_server_files und pg_write_server_files erlauben COPY … PROGRAM bzw. Dateizugriff mit den Rechten des Dienstkontos — praktisch Superuser; pg_read_all_data und pg_write_all_data geben Lese- bzw. Schreibrechte auf alle Tabellen, Views und Schemata sämtlicher Datenbanken, unabhängig von deren GRANTs (Row-Level Security bleibt wirksam). Eine Sicherungsrolle mit pg_read_all_data ist üblich und gewollt; sie wird trotzdem gemeldet, damit die Liste bewusst bestätigt wird.",
+      "remediation": "Mitgliedschaft entziehen oder dokumentiert auf dedizierte Sicherungs-/Auswertungsrollen beschränken; Datenimport über clientseitiges \\copy abwickeln."
+    },
+    {
+      "id": "roles.replication_login",
+      "title": "REPLICATION-Recht nur für dedizierte Replikations- und Sicherungsrollen",
+      "category": "Rollen und Rechte",
+      "severity": "low",
+      "goal": "Vertraulichkeit",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT rolname AS object, 'REPLICATION' AS detail FROM pg_roles WHERE rolreplication AND rolcanlogin AND NOT rolsuper ORDER BY rolname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Eine Rolle mit REPLICATION kann über das Replikationsprotokoll (pg_basebackup) den gesamten Datenbestand des Clusters abziehen.",
+      "remediation": "REPLICATION nur dedizierten Standby- und Backup-Rollen geben und diese in pg_hba.conf auf die Gegenstellen begrenzen."
     },
     {
       "id": "roles.bypassrls",
@@ -366,6 +432,23 @@
       "automation": "manual",
       "rationale": "CREATEROLE erlaubt das Anlegen und Verwalten anderer Rollen; vor Version 16 reichte es fast an Superuser heran.",
       "remediation": "Liste mit dem Rollenkonzept abgleichen; createrole_self_grant bewusst setzen."
+    },
+    {
+      "id": "roles.createrole_self_grant",
+      "title": "CREATEROLE-Rollen vergeben sich neue Rollen nicht automatisch mit INHERIT/SET",
+      "category": "Rollen und Rechte",
+      "severity": "low",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "min_version": 160000,
+      "check": {
+        "type": "query",
+        "sql": "SELECT 'createrole_self_grant' AS object, current_setting('createrole_self_grant') AS detail WHERE current_setting('createrole_self_grant') <> '' AND EXISTS (SELECT 1 FROM pg_roles WHERE rolcreaterole AND NOT rolsuper)"
+      },
+      "fix": { "type": "conf", "settings": { "createrole_self_grant": "" } },
+      "automation": "confirm",
+      "rationale": "Steht createrole_self_grant auf set oder inherit, erhält eine CREATEROLE-Rolle automatisch die Rechte jeder von ihr angelegten Rolle.",
+      "remediation": "createrole_self_grant = '' belassen; Verwaltungsrecht (WITH ADMIN OPTION) reicht zum Verwalten angelegter Rollen."
     },
     {
       "id": "roles.allow_alter_system",
@@ -444,6 +527,38 @@
       "automation": "confirm",
       "rationale": "Standardmäßig kann jede angemeldete Rolle alle Datenbank- und Rollennamen lesen (psql \\l und \\du, GUI-Werkzeuge), auch die von Datenbanken, in die sie sich nicht verbinden darf. Wer mehrere Anwendungen oder Mandanten auf einem Server betreibt, gibt so Namen preis, die Kundennamen oder Personenkennungen sein können. Der Entzug nimmt diese bequemen Wege; er ist keine Geheimhaltung: Rollennamen lassen sich über ihre Kennung (oid::regrole) weiter ermitteln, und die Fehlermeldung beim Verbindungsversuch verrät, ob eine Datenbank existiert. pg_stat_activity zeigt weiter Datenbank- und Rollennamen laufender Sitzungen; Replikationssichten (pg_replication_slots) gehören nicht zur Regel und wurden nicht untersucht. Eine Zeilenfilterung gibt es im Katalog nicht (kein Row-Level-Security auf Systemkatalogen); wer Mandanten wirklich trennen muss, nimmt getrennte Cluster.",
       "remediation": "Die Berechtigung steht in jeder Datenbank einzeln (auch in template1, damit neue Datenbanken sie erben; template0 prüft das Werkzeug nicht — Datenbanken, die mit TEMPLATE template0 angelegt werden, erscheinen später als Befund und brauchen den Entzug selbst). Vorher allen Rollen und Anwendungen, die die Kataloge lesen, gezielt SELECT geben: Administrationsrollen und Werkzeuge, die Listen anzeigen, Monitoring (etwa Exporter auf pg_stat_database), Treiber mit Metadatenabfragen, die Rolle von pg-harden und die Sicherungsrolle (pg_dump braucht pg_database und pg_roles); in einer Testumgebung erproben. Rollen, die das Recht über eine eigene Vergabe oder Rollenmitgliedschaft haben, sind vom Entzug an PUBLIC nicht betroffen. Danach schlagen \\l, \\du und GUI-Baumansichten für alle anderen mit „permission denied“ fehl. Für Anwender, die nur ihre eigenen Datenbanken sehen sollen, eine Ansicht des Administrators anbieten, die mit has_database_privilege(datname, 'CONNECT') filtert (README). Der Entzug steht im Dump (pg_dump führt ihn mit) und blieb in Tests bei einer Wiederherstellung mit pg_dumpall und bei pg_upgrade (17 nach 18, 14 nach 19rc1) erhalten; nach jedem Upgrade oder jeder Wiederherstellung die Regel erneut prüfen. Der Rückweg (apply rollback) stellt nur die Datenbanken wieder her, die beim Fix geprüft wurden — später aus template1 angelegte erben den Entzug und brauchen das GRANT selbst."
+    },
+    {
+      "id": "db.default_acl_public",
+      "title": "Keine CREATE-Rechte auf Fachschemata und keine Standardrechte (ALTER DEFAULT PRIVILEGES) für PUBLIC",
+      "category": "Rollen und Rechte",
+      "severity": "medium",
+      "goal": "Integrität",
+      "scope": "database",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() || '.' || n.nspname AS object, 'PUBLIC hat CREATE auf Schema' AS detail FROM pg_namespace n WHERE n.nspname NOT IN ('public', 'pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' AND has_schema_privilege('public', n.oid, 'CREATE') UNION ALL SELECT current_database() || coalesce('.' || n.nspname, '') AS object, 'Standardrecht (ALTER DEFAULT PRIVILEGES) für PUBLIC: ' || a.privilege_type || ' auf ' || CASE d.defaclobjtype WHEN 'r' THEN 'Tabellen' WHEN 'S' THEN 'Sequenzen' WHEN 'f' THEN 'Funktionen' WHEN 'T' THEN 'Typen' WHEN 'n' THEN 'Schemata' ELSE d.defaclobjtype::text END AS detail FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace CROSS JOIN LATERAL aclexplode(d.defaclacl) a WHERE a.grantee = 0 AND NOT (d.defaclobjtype = 'f' AND a.privilege_type = 'EXECUTE') AND NOT (d.defaclobjtype = 'T' AND a.privilege_type = 'USAGE') ORDER BY 1, 2"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein für PUBLIC beschreibbares Fachschema erlaubt dieselben Angriffe über den search_path wie public; Standardrechte (ALTER DEFAULT PRIVILEGES … GRANT … TO PUBLIC) geben künftig angelegte Tabellen oder Sequenzen automatisch für alle Rollen frei.",
+      "remediation": "REVOKE CREATE ON SCHEMA <schema> FROM PUBLIC ausführen und Standardrechte statt an PUBLIC gezielt an Anwendungsrollen vergeben."
+    },
+    {
+      "id": "db.rls_policies_inactive",
+      "title": "Tabellen mit Row-Level-Security-Policies haben RLS eingeschaltet",
+      "category": "Rollen und Rechte",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "database",
+      "check": {
+        "type": "query",
+        "sql": "SELECT format('%I.%I', n.nspname, c.relname) AS object, 'Policies angelegt, aber ENABLE ROW LEVEL SECURITY fehlt' AS detail FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE NOT c.relrowsecurity AND EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid) UNION ALL SELECT format('%I.%I', n.nspname, c.relname) AS object, 'ENABLE ROW LEVEL SECURITY ohne Policy: Nicht-Eigentümer sehen keine Zeilen' AS detail FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relrowsecurity AND c.relkind IN ('r', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND NOT EXISTS (SELECT 1 FROM pg_policy p WHERE p.polrelid = c.oid) ORDER BY 1"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "CREATE POLICY allein aktiviert Row-Level Security nicht: solange ALTER TABLE … ENABLE ROW LEVEL SECURITY nicht ausgeführt wurde, wirken angelegte Policies überhaupt nicht und alle Zeilen sind sichtbar. Umgekehrt deutet eingeschaltete RLS ohne jede Policy auf eine unvollständige Einrichtung: Nicht-Eigentümer sehen dann keine Zeilen, und naheliegend ist die falsche Reparatur, RLS wieder abzuschalten.",
+      "remediation": "ALTER TABLE <tabelle> ENABLE ROW LEVEL SECURITY (und bei Bedarf FORCE ROW LEVEL SECURITY für den Tabelleneigentümer) ausführen; row_security = on belassen."
     },
     {
       "id": "code.secdef_search_path",
@@ -525,6 +640,40 @@
       "remediation": "Liste mit dem Bedarf abgleichen."
     },
     {
+      "id": "code.fdw_secrets",
+      "title": "Keine USER MAPPING FOR PUBLIC und keine Klartext-Passwörter in Foreign-Data-Wrappern oder Subscriptions",
+      "category": "Code in der Datenbank",
+      "severity": "high",
+      "goal": "Vertraulichkeit",
+      "scope": "database",
+      "requires": "superuser",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() || ': USER MAPPING FOR PUBLIC ON ' || s.srvname AS object, 'Zuordnung für PUBLIC teilt die Fremdserver-Anmeldung mit allen Rollen' AS detail FROM pg_user_mapping u JOIN pg_foreign_server s ON s.oid = u.umserver WHERE u.umuser = 0 UNION ALL SELECT current_database() || ': USER MAPPING (' || coalesce(r.rolname, 'PUBLIC') || ' -> ' || s.srvname || ')' AS object, 'Option ' || split_part(opt, '=', 1) || ' im Klartext hinterlegt (Wert wird nicht ausgegeben)' AS detail FROM pg_user_mapping u JOIN pg_foreign_server s ON s.oid = u.umserver LEFT JOIN pg_roles r ON r.oid = u.umuser CROSS JOIN LATERAL unnest(coalesce(u.umoptions, ARRAY[]::text[])) AS opt WHERE split_part(lower(opt), '=', 1) IN ('password', 'secret', 'secret_access_key', 'api_key', 'token') UNION ALL SELECT 'Subscription ' || subname AS object, 'Verbindungszeichenfolge enthält password= im Klartext (Wert wird nicht ausgegeben)' AS detail FROM pg_subscription WHERE subdbid = (SELECT oid FROM pg_database WHERE datname = current_database()) AND (subconninfo ~* '(^|\\s)password\\s*=' OR subconninfo ~* 'postgres(ql)?://[^\\s:@/]+:[^\\s@/]+@') ORDER BY 1, 2"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Ein USER MAPPING FOR PUBLIC gibt jeder Rolle Zugriff auf die hinterlegte Fremdverbindung; Passwörter in pg_user_mapping oder pg_subscription stehen im Systemkatalog und landen in logischen Sicherungen (pg_dumpall / pg_dump) im Klartext.",
+      "remediation": "USER MAPPING nur für gezielte Rollen anlegen; Anmeldung an Fremdservern und Publishern über Client-Zertifikate (sslcert/sslkey), GSSAPI oder die Passwortdatei des Dienstkontos (.pgpass) statt über password= in den Optionen abwickeln."
+    },
+    {
+      "id": "code.event_triggers",
+      "title": "Installierte Event-Trigger (Bestandsliste)",
+      "category": "Code in der Datenbank",
+      "severity": "info",
+      "goal": "Integrität",
+      "scope": "database",
+      "kind": "inventory",
+      "check": {
+        "type": "query",
+        "sql": "SELECT current_database() || '.' || evtname AS object, evtevent || ' -> ' || evtfoid::regprocedure::text || ' (Eigentümer ' || pg_get_userbyid(evtowner) || ', Status ' || CASE evtenabled WHEN 'O' THEN 'aktiv' WHEN 'A' THEN 'immer aktiv (ALWAYS)' WHEN 'R' THEN 'Replica' WHEN 'D' THEN 'deaktiviert' ELSE evtenabled::text END || ')' AS detail FROM pg_event_trigger ORDER BY evtname"
+      },
+      "fix": { "type": "manual" },
+      "automation": "manual",
+      "rationale": "Event-Trigger laufen bei DDL-Anweisungen oder beim Anmelden (login ab Version 17) automatisch im Kontext der auslösenden Sitzung bzw. als SECURITY DEFINER.",
+      "remediation": "Liste mit den dokumentierten Betriebs- und Sicherheitsmechanismen abgleichen; unbekannte Event-Trigger entfernen."
+    },
+    {
       "id": "log.collector",
       "title": "Protokolle werden in Dateien oder an syslog geschrieben",
       "category": "Protokollierung",
@@ -600,19 +749,32 @@
     },
     {
       "id": "log.pgaudit",
-      "title": "pgAudit ist geladen",
+      "title": "pgAudit ist geladen und eingerichtet",
       "category": "Protokollierung",
       "severity": "medium",
       "goal": "Integrität",
       "scope": "cluster",
       "check": {
         "type": "query",
-        "sql": "SELECT 'shared_preload_libraries' AS object, 'pgaudit nicht geladen' AS detail WHERE current_setting('shared_preload_libraries') !~* '(^|[ ,/])pgaudit($|[ ,])'"
+        "sql": "SELECT 'shared_preload_libraries' AS object, 'pgaudit nicht geladen' AS detail WHERE current_setting('shared_preload_libraries') !~* '(^|[ ,/])pgaudit($|[ ,])' UNION ALL SELECT 'pgaudit.log' AS object, 'pgaudit ist geladen, aber weder pgaudit.log noch pgaudit.log_role ist eingerichtet' AS detail WHERE current_setting('shared_preload_libraries') ~* '(^|[ ,/])pgaudit($|[ ,])' AND lower(coalesce(nullif(trim(current_setting('pgaudit.log', true)), ''), 'none')) = 'none' AND coalesce(trim(current_setting('pgaudit.log_role', true)), '') = '' AND NOT EXISTS (SELECT 1 FROM pg_db_role_setting s CROSS JOIN LATERAL unnest(s.setconfig) AS cfg WHERE (cfg ~* '^pgaudit\\.log=' AND lower(trim(substr(cfg, 13))) NOT IN ('', 'none')) OR (cfg ~* '^pgaudit\\.log_role=' AND trim(substr(cfg, 18)) <> ''))"
       },
       "fix": { "type": "manual" },
       "automation": "manual",
-      "rationale": "Die Bordmittel protokollieren Anweisungstexte, aber nicht zuverlässig, auf welche Tabellen eine Anweisung tatsächlich zugreift (Views, Funktionen, dynamisches SQL). Das leistet pgAudit mit Session- und Object-Audit.",
-      "remediation": "pgaudit installieren, in shared_preload_libraries aufnehmen (Neustart), pgaudit.log bzw. Objekt-Audit einrichten."
+      "rationale": "Die Bordmittel protokollieren Anweisungstexte, aber nicht zuverlässig, auf welche Tabellen eine Anweisung tatsächlich zugreift (Views, Funktionen, dynamisches SQL). Das leistet pgAudit mit Session- und Object-Audit — allerdings erst, wenn pgaudit.log oder pgaudit.log_role auch gesetzt ist. Als eingerichtet gilt auch ein Wert, der nur für eine Rolle oder Datenbank gesetzt ist (ALTER ROLE/DATABASE … SET); ob er die gewünschten Sitzungen erfasst, prüft die Regel nicht.",
+      "remediation": "pgaudit installieren, in shared_preload_libraries aufnehmen (Neustart), pgaudit.log (z. B. 'ddl, role') bzw. Objekt-Audit über pgaudit.log_role einrichten."
+    },
+    {
+      "id": "log.lock_waits",
+      "title": "Lange Sperrwartezeiten werden protokolliert",
+      "category": "Protokollierung",
+      "severity": "low",
+      "goal": "Verfügbarkeit",
+      "scope": "cluster",
+      "check": { "type": "setting", "name": "log_lock_waits", "op": "eq", "value": "on" },
+      "fix": { "type": "conf", "settings": { "log_lock_waits": "on" } },
+      "automation": "confirm",
+      "rationale": "Ohne log_lock_waits bleiben Blockaden durch hängende Sitzungen oder missbräuchliche Sperren (LOCK TABLE) ab deadlock_timeout im Protokoll unsichtbar.",
+      "remediation": "log_lock_waits = on setzen."
     },
     {
       "id": "log.parameter_length",
@@ -777,6 +939,22 @@
       "automation": "manual",
       "rationale": "Ohne Prüfsummen fällt eine stille Beschädigung von Datenseiten erst auf, wenn die Daten schon falsch gelesen wurden.",
       "remediation": "Neu angelegte Cluster ab Version 18 haben sie standardmäßig; bestehende mit pg_checksums --enable im gestoppten Zustand."
+    },
+    {
+      "id": "data.crash_safety",
+      "title": "Absturzsicherheit und Prüfsummentreue sind nicht abgeschaltet (fsync, full_page_writes)",
+      "category": "Datenschutz und Integrität",
+      "severity": "high",
+      "goal": "Integrität",
+      "scope": "cluster",
+      "check": {
+        "type": "query",
+        "sql": "SELECT name AS object, setting AS detail FROM pg_settings WHERE (name IN ('fsync', 'full_page_writes') AND setting <> 'on') OR (name IN ('ignore_checksum_failure', 'zero_damaged_pages') AND setting <> 'off') ORDER BY name"
+      },
+      "fix": { "type": "conf", "settings": { "fsync": "on", "full_page_writes": "on", "ignore_checksum_failure": "off", "zero_damaged_pages": "off" } },
+      "automation": "confirm",
+      "rationale": "Abgeschaltetes fsync oder full_page_writes führt nach einem Absturz oder Stromausfall zu nicht behebbaren Schäden am Datenbestand; ignore_checksum_failure und zero_damaged_pages übergehen beschädigte Datenseiten bzw. überschreiben sie im Speicher und auf Platte mit Nullen.",
+      "remediation": "fsync = on, full_page_writes = on, ignore_checksum_failure = off und zero_damaged_pages = off setzen."
     }
   ]
 }
