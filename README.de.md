@@ -148,8 +148,10 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   Änderung gehen denselben Weg (nur reguläre Dateien, mit Größengrenze). Ein Verzeichnis von root auf dem Weg, in das Gruppe oder andere
   schreiben können, wird abgewiesen; die Identität für jedes Ziel steht vor der ersten Änderung fest. `postgresql.conf` wird für die Änderung nur
   einmal gelesen; `apply` legt höchstens eine Verzeichnisebene an. Eine Datei von root in einem Verzeichnis des Dienstkontos wird an Ort und
-  Stelle geschrieben, wenn das Dienstkonto sie beschreiben darf, sonst abgewiesen. Windows kennt keinen Identitätswechsel; Junctions sind
-  dort noch nicht untersucht. Dateien werden über eine Temp-Datei ersetzt (Windows: erst schreiben, dann
+  Stelle geschrieben, wenn das Dienstkonto sie beschreiben darf, sonst abgewiesen. Windows kennt keinen Identitätswechsel:
+  `client --user` liest im Profil des geprüften Kontos keine Datei, deren Weg über eine Junction oder einen symbolischen Link woandershin
+  führt (Meldung „nicht geprüft“; verbleibende Lücken im CHANGELOG); für `check`, `apply` und `rollback` sind Junctions dort noch nicht
+  untersucht. Dateien werden über eine Temp-Datei ersetzt (Windows: erst schreiben, dann
   kürzen), nie vorher geleert. Stirbt der Prozess mitten in der Dateiphase (Fehler, Strg+C, kill), spielt ein Wächter die Sicherungen
   zurück — außerhalb von Windows nur mit den PHP-Erweiterungen `pcntl` und `posix`; fehlen sie, ändert `apply` keine Dateien.
 - **Neuladen:** ein nicht bestätigtes Neuladen zählt als Fehler (der Anmeldetest würde sonst noch die alte Konfiguration sehen).

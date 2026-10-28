@@ -130,18 +130,67 @@ final class Fs
    * Reads a file another account may control, for check and client (postmaster.pid, unit files, a person's .pgpass, scripts):
    * with the identity readerFor chooses, only a regular file, at most $max bytes. A link the account planted to a file of root
    * then reaches only what that account can read; null also when no identity can be determined.
+   * On Windows, with $base (the profile of the examined account, ClientContext::guardBase): null as well when the way leads
+   * elsewhere, checked before and again after reading (see windowsRedirected) — swapping a directory in between then needs a
+   * second swap back within the same moment.
    */
-  public static function readGuarded(string $path, int $max = 5242880): ?string
+  public static function readGuarded(string $path, int $max = 5242880, ?string $base = null): ?string
   {
     // A relative path (PGPASSFILE=x) counts from the working directory, as for libpq; the walk needs it absolute.
     if (!Platform::windows() && !str_starts_with($path, '/') && ($cwd = self::attempt(fn() => getcwd())) !== null) {
       $path = rtrim($cwd, '/') . '/' . $path;
     }
+    // Windows has no identity switch: below the examined account's profile nothing may lead elsewhere (see windowsRedirected).
+    if ($base !== null && self::windowsRedirected($path, $base)) {
+      return null;
+    }
     try {
-      return self::asReaderOf($path, fn() => self::read($path, $max));
+      $content = self::asReaderOf($path, fn() => self::read($path, $max));
     } catch (HardenException) {
       return null;
     }
+    return $base !== null && self::windowsRedirected($path, $base) ? null : $content;
+  }
+
+  /**
+   * Windows: whether $path, below the profile $base of an account an administrator examines, may lead elsewhere. Without an
+   * identity switch the administrator would follow a junction or link the account placed in its profile to a file the account
+   * itself cannot read (another profile, a file of the administrators) and report it as the account's. Decided on the final path
+   * Windows reports for an opened handle (readlink, GetFinalPathNameByHandle — no realpath cache, long names, also through a
+   * junction to a volume GUID path): it must be exactly the profile's final path plus the remaining components. Counted as
+   * redirected as well: "..", a path that cannot be opened (missing, access denied), a profile that cannot be resolved, and a path
+   * that reaches into the profile under another spelling (short name, a link outside) — its components cannot be attributed.
+   * Forward slashes, case and a leading "\\?\" are only spelling and compared as such. Paths that stay outside the profile (system
+   * files) are not the account's to redirect and are not judged. Only the content and ACL of a file are
+   * guarded; whether a file exists and its size may still be taken through a redirect (no content). Elsewhere (Unix) always
+   * false: readerFor decides.
+   */
+  public static function windowsRedirected(string $path, string $base): bool
+  {
+    if (!Platform::windows()) {
+      return false;
+    }
+    $plain = static fn(string $p): string => strtolower(rtrim(preg_replace('/^\\\\\\\\\?\\\\/', '', str_replace('/', '\\', $p)), '\\'));
+    $final = static function (string $p) use ($plain): ?string {
+      $r = self::attempt(fn() => readlink($p));
+      return is_string($r) ? $plain($r) : null;
+    };
+    $literalBase = $plain($base);
+    $literal = $plain($path);
+    $profile = $final($base);
+    $target = $final($path);
+    if ($profile === null) {
+      return true;
+    }
+    if ($literal !== $literalBase && !str_starts_with($literal, $literalBase . '\\')) {
+      // Outside the profile as written: judged only if it nevertheless ends up inside it.
+      return $target !== null && ($target === $profile || str_starts_with($target, $profile . '\\'));
+    }
+    $rest = array_filter(explode('\\', substr($literal, strlen($literalBase))), fn($s) => $s !== '' && $s !== '.');
+    if ($target === null || in_array('..', $rest, true)) {
+      return true;
+    }
+    return $target !== implode('\\', [$profile, ...$rest]);
   }
 
   /**
@@ -308,6 +357,8 @@ final class Fs
    */
   public static function read(string $path, int $max = 5242880): ?string
   {
+    // PHP resolves stat and fopen through its realpath cache (up to 120 s): a way swapped since then would still be taken as before.
+    clearstatcache(true);
     // Only a regular file is opened at all (opening a device can act on it, a tape rewinds on close); the handle must then be that file.
     $before = self::attempt(fn() => stat($path));
     if ($before === null || ($before['mode'] & 0170000) !== 0100000 || $before['size'] > $max) {
@@ -325,6 +376,13 @@ final class Fs
       // Regular files never block; Windows cannot switch the mode for files and reports false — not an error.
       self::attempt(fn() => stream_set_blocking($fh, true));
       $content = self::attempt(fn() => stream_get_contents($fh, $max + 1));
+      // Still the file at this path after reading (fresh stat, the cache would repeat $before): a way swapped for the open and
+      // back afterwards (Windows has no identity switch, see windowsRedirected) now needs a third swap in time.
+      clearstatcache(true);
+      $after = self::attempt(fn() => stat($path));
+      if ($after === null || $after['dev'] !== $st['dev'] || $after['ino'] !== $st['ino']) {
+        return null;
+      }
       return $content === null || strlen($content) > $max ? null : $content;
     } finally {
       fclose($fh);

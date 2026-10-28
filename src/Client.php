@@ -25,6 +25,15 @@ final class ClientContext
     public readonly array $extraScanDirs,
   ) {}
 
+  /**
+   * Windows, another account: its profile, below which nothing may lead elsewhere (Fs::windowsRedirected) — the administrator
+   * cannot take on the account's identity there, so a junction the account placed would make it read for the account.
+   */
+  public function guardBase(): ?string
+  {
+    return Platform::windows() && !$this->isSelf ? $this->home : null;
+  }
+
   public static function resolve(Options $opt): self
   {
     $requested = $opt->get('user');
@@ -120,7 +129,8 @@ final class SecretScan
   public array $skipped = [];
   private float $deadline;
 
-  public function __construct()
+  /** @param ?string $guardBase ClientContext::guardBase(): files below it are read only if nothing on the way leads elsewhere */
+  public function __construct(public readonly ?string $guardBase = null)
   {
     $this->deadline = microtime(true) + self::MAX_SECONDS;
   }
@@ -143,13 +153,17 @@ final class SecretScan
       $this->skipped[] = $path . ($st === null ? ' (nicht lesbar)' : ' (keine reguläre Datei)');
       return [];
     }
+    if ($this->guardBase !== null && Fs::windowsRedirected($path, $this->guardBase)) {
+      $this->skipped[] = $path . ' (' . ClientProbes::REDIRECTED . ' — nicht gelesen)';
+      return [];
+    }
     if ($st['size'] > self::MAX_BYTES) {
       $this->skipped[] = $path . ' (größer als 1 MiB)';
       return [];
     }
-    $content = Fs::readGuarded($path, self::MAX_BYTES);
+    $content = Fs::readGuarded($path, self::MAX_BYTES, $this->guardBase);
     if ($content === null) {
-      $this->skipped[] = $path . ' (nicht lesbar)';
+      $this->skipped[] = $path . ($this->guardBase !== null ? ' (nicht lesbar oder ' . ClientProbes::REDIRECTED . ')' : ' (nicht lesbar)');
       return [];
     }
     // Windows PowerShell 5.1 and Notepad write UTF-16 with a byte order mark.
@@ -206,15 +220,13 @@ final class SecretScan
     return $out;
   }
 
-  /** Windows junctions are not always reported by is_link(): a directory that resolves elsewhere is not entered. */
+  /**
+   * PHP reports a Windows junction neither as a link nor as a directory, so walk does not enter one; this also keeps out a directory
+   * that resolves anywhere but to its own name in its parent (same rule as Fs::windowsRedirected, without the realpath cache).
+   */
   private static function isReparsePoint(string $parent, string $path): bool
   {
-    if (!Platform::windows()) {
-      return false;
-    }
-    $real = Fs::canonical($path);
-    $expected = Fs::canonical($parent);
-    return $real === null || $expected === null || dirname($real) !== $expected;
+    return Fs::windowsRedirected($path, $parent);
   }
 
   private function walk(string $dir, int $depth, array &$out): void
@@ -266,7 +278,12 @@ final class ClientProbes
   /** Principals that may read a password file on Windows: owner (the account itself), SYSTEM, Administrators, CREATOR OWNER. */
   private const ACL_ALLOWED = ['S-1-5-18', 'S-1-5-32-544', 'S-1-3-0'];
 
+  /** Why a file in another account's profile was not read on Windows (Fs::windowsRedirected). */
+  public const REDIRECTED = 'Weg im Profil über Junction/symbolischen Link bzw. nicht auflösbar';
+
   private static ?array $facts = null;
+  /** @var array<string, true> files whose way was already redirected before the PowerShell run collected their ACLs */
+  private static array $factsRedirected = [];
   private static ?SecretScan $scan = null;
 
   /** @return array{findings: array[], unchecked: string[], notes: string[]} */
@@ -352,6 +369,10 @@ final class ClientProbes
     $paths = array_values(array_unique(array_merge(
       [self::pgpassFile($c)], self::serviceFiles($c), ...array_values(self::certFiles($c)),
     )));
+    // Get-Acl follows a junction: checked before the run here and once more in aclProblems after it.
+    if (($base = $c->guardBase()) !== null) {
+      self::$factsRedirected = array_fill_keys(array_filter($paths, fn($p) => Fs::windowsRedirected($p, $base)), true);
+    }
     $script = <<<'PS'
       $res = @{ env = @{ user = $false; machine = $false }; acls = @(); tasks = @() }
       try { $res.env.user = [bool][Environment]::GetEnvironmentVariable('PGPASSWORD', 'User') } catch {}
@@ -384,10 +405,27 @@ final class ClientProbes
     return self::$facts = Platform::powershell($script, ['paths' => $paths]);
   }
 
+  /** "a, b oder c": why a file was not read — with the redirect of Fs::windowsRedirected only where it applies (Windows, another account). */
+  private static function unreadable(ClientContext $c, string ...$reasons): string
+  {
+    if ($c->guardBase() !== null) {
+      $reasons[] = self::REDIRECTED;
+    }
+    $last = array_pop($reasons);
+    return $reasons === [] ? $last : implode(', ', $reasons) . ' oder ' . $last;
+  }
+
   /** Windows: findings for principals outside the allowed set that can reach the file. */
   private static function aclProblems(ClientContext $c, string $path, array &$r, string $what): void
   {
-    foreach (self::windowsFacts($c)['acls'] ?? [] as $acl) {
+    // The ACL behind a junction belongs to another file: reporting it would attribute that file's access to this account. Checked
+    // before and after the PowerShell run; a swap in and back out while it runs is not caught (Get-Acl takes the path, no handle).
+    $facts = self::windowsFacts($c);
+    if (($base = $c->guardBase()) !== null && (isset(self::$factsRedirected[$path]) || Fs::windowsRedirected($path, $base))) {
+      $r['unchecked'][] = Text::printable($path) . ': ' . self::REDIRECTED . ' — ACL nicht geprüft';
+      return;
+    }
+    foreach ($facts['acls'] ?? [] as $acl) {
       if (($acl['path'] ?? null) !== $path) {
         continue;
       }
@@ -426,9 +464,9 @@ final class ClientProbes
       return;
     }
     foreach ($files as $file) {
-      $content = Fs::readGuarded($file);
+      $content = Fs::readGuarded($file, 5242880, $c->guardBase());
       if ($content === null) {
-        $r['unchecked'][] = Text::printable($file) . ': nicht lesbar oder größer als 5 MiB';
+        $r['unchecked'][] = Text::printable($file) . ': ' . self::unreadable($c, 'nicht lesbar', 'größer als 5 MiB');
         continue;
       }
       foreach (preg_split('/\r\n|\n|\r/', $content) as $i => $line) {
@@ -496,9 +534,9 @@ final class ClientProbes
    *
    * @return array<int, array{line: int, fields: string[]}> host, port, database, user
    */
-  private static function pgpassLines(string $file): ?array
+  private static function pgpassLines(string $file, ?string $base): ?array
   {
-    $content = Fs::readGuarded($file);
+    $content = Fs::readGuarded($file, 5242880, $base);
     if ($content === null) {
       return null;
     }
@@ -533,9 +571,9 @@ final class ClientProbes
       $r['notes'][] = 'Keine Passwortdatei gefunden (' . Text::printable($file) . ')';
       return;
     }
-    $lines = self::pgpassLines($file);
+    $lines = self::pgpassLines($file, $c->guardBase());
     if ($lines === null) {
-      $r['unchecked'][] = Text::printable($file) . ': nicht lesbar';
+      $r['unchecked'][] = Text::printable($file) . ': ' . self::unreadable($c, 'nicht lesbar', 'größer als 5 MiB');
       return;
     }
     switch ($kind) {
@@ -593,14 +631,15 @@ final class ClientProbes
     }
   }
 
-  private static function scan(): SecretScan
+  private static function scan(ClientContext $c): SecretScan
   {
-    return self::$scan ??= new SecretScan();
+    // One scan per run; a context with another profile (never within one run today) gets its own, never the other one's results.
+    return self::$scan !== null && self::$scan->guardBase === $c->guardBase() ? self::$scan : self::$scan = new SecretScan($c->guardBase());
   }
 
   private static function secretsInFiles(ClientContext $c, array &$r): void
   {
-    $scan = self::scan();
+    $scan = self::scan($c);
     $reported = [];
     $add = function (string $path, array $hits) use (&$r, &$reported): void {
       if (isset($reported[$path])) {
@@ -736,10 +775,10 @@ final class ClientProbes
       return;
     }
     foreach ($files as $file) {
-      $pem = Fs::readGuarded($file, 1048576);
+      $pem = Fs::readGuarded($file, 1048576, $c->guardBase());
       $info = $pem === null ? null : Fs::attempt(fn() => openssl_x509_parse($pem));
       if (!is_array($info)) {
-        $r['unchecked'][] = Text::printable($file) . ': Zertifikat nicht lesbar';
+        $r['unchecked'][] = Text::printable($file) . ': ' . self::unreadable($c, 'Zertifikat nicht lesbar');
         continue;
       }
       $left = (int) floor(($info['validTo_time_t'] - time()) / 86400);

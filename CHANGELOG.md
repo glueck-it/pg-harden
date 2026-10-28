@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **Windows, `client --user=<account>`: files below the examined account's profile are no longer read through a junction or
+  symbolic link the account placed there (remaining gaps below).** Windows has no identity switch, so an administrator would follow
+  such a junction — to another profile or a file of the administrators — and report it as the account's (places and kinds of finding,
+  ACL entries; no values). A non-administrator can create a junction.
+  - Changed: a file below the profile is read only if the final path Windows reports for the opened file is exactly the profile plus
+    the remaining names. This is checked before and after reading, and after reading the file at the path must still be the one that
+    was read. It applies to the password file, service file, client certificates, the file search and the ACLs.
+  - Reported as "nicht geprüft" instead: a way through a junction or symbolic link, a path that cannot be resolved, one with `..`, and
+    one that reaches into the profile under another spelling (a short name such as `FRANK~1`; forward slashes, case and a leading
+    `\\?\` are compared as mere spelling).
+  - Not covered: an account that keeps swapping a directory for a junction and back can still hit the moment of a read (it then needs
+    three swaps in time) and more easily the PowerShell run that reads the ACLs (two swaps within seconds; it takes paths, not
+    handles). A hard link is no redirect by its path; Windows 11 lets a non-administrator create one only to a file the account may
+    write. Whether a file exists, its name and its size may still be taken through a redirect. Files outside the profile are not judged.
+    `check`, `apply` and `rollback` on Windows (files in the data directory of the service account): not examined yet.
+  - Test: `tests/windows-redirect.php` (no administrator rights needed).
+
 ## 0.3.2 (2026-10-26)
 
 - **Security fix — update if you run `check` or `client` as root.** Affected: 0.3.0 and 0.3.1 on Linux and other Unix systems;

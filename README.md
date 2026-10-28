@@ -145,7 +145,9 @@ current run; otherwise it is reported as "not comparable".
   nothing beyond its rights (test T14). Reads for a change go the same way (only regular files, size limit). A directory of root on the way
   that group or others can write is refused; the identity of every target is settled before the first change. `postgresql.conf` is read once for
   the change; `apply` creates at most one directory level. A file of root in a directory of the service account is written in place if that
-  account may write it, otherwise refused. Windows has no identity switch; junctions there have not been examined yet. Files are replaced via a
+  account may write it, otherwise refused. Windows has no identity switch: `client --user` does not read files in the examined account's
+  profile whose way leads elsewhere through a junction or symbolic link (reported as "nicht geprüft"; remaining gaps in the CHANGELOG);
+  for `check`, `apply` and `rollback`, junctions there have not been examined yet. Files are replaced via a
   temp file (Windows: write first, then truncate), never emptied beforehand. If the process dies in the middle of the file phase, a watchdog
   restores the backups — outside Windows only with the PHP extensions `pcntl` and `posix`; without them `apply` does not change files.
 - **Reload:** an unconfirmed reload counts as an error.
