@@ -745,41 +745,105 @@ final class Applier
       'user' => $ctx->user,
       'identity' => (new ServerFiles($this->connector))->identity(),
     ]);
-    Files::write($dir . '/report-before.json', Text::json($before), exclusive: true);
-
     $failed = false;
-    if ($plan['conf'] !== [] || $plan['hba'] !== []) {
-      $failed = !$this->applyFiles($plan, $ctx, $journal);
-    }
-    if (!$failed && $plan['sql'] !== []) {
-      $failed = !$this->applySql($plan['sql'], $journal);
-    }
-
-    // New connections: settings of the backend/superuser-backend kind (log_connections, log_disconnections …) only reach new sessions.
     $after = null;
-    $comparison = '';
+    $postError = null;
+    $completed = false;
     try {
-      $post = new Connector($this->opt);
-      $postCtx = ServerContext::load($post, $this->opt);
-      $after = Report::build($postCtx, $this->catalog, (new Checker($post, $postCtx, $this->catalog))->run(), $this->opt, $post);
-      $after['comparison'] = Verifier::compare($before, $after);
-      Files::write($dir . '/report-after.json', Text::json($after), exclusive: true);
-      $comparison = Verifier::renderText($after['comparison']);
-    } catch (Throwable $e) {
-      $failed = true;
-      $comparison = "\nNachprüfung nicht möglich: " . Text::printable(strtok($e->getMessage(), "\n") ?: get_class($e)) . "\n";
+      Files::write($dir . '/report-before.json', Text::json($before), exclusive: true);
+      if ($plan['conf'] !== [] || $plan['hba'] !== []) {
+        $failed = !$this->applyFiles($plan, $ctx, $journal);
+      }
+      if (!$failed && $plan['sql'] !== []) {
+        $failed = !$this->applySql($plan['sql'], $journal);
+      }
+
+      // New connections: settings of the backend/superuser-backend kind (log_connections, log_disconnections …) only reach new sessions.
+      try {
+        $post = new Connector($this->opt);
+        $postCtx = ServerContext::load($post, $this->opt);
+        $report = Report::build($postCtx, $this->catalog, (new Checker($post, $postCtx, $this->catalog))->run(), $this->opt, $post);
+        $report['comparison'] = Verifier::compare($before, $report);
+        Files::write($dir . '/report-after.json', Text::json($report), exclusive: true);
+        $after = $report;
+      } catch (Throwable $e) {
+        $failed = true;
+        $postError = Text::printable(strtok($e->getMessage(), "\n") ?: get_class($e));
+      }
+      try {
+        $journal->data['finished_at'] = date(DATE_ATOM);
+        $journal->data['failed'] = $failed;
+        $journal->flush();
+      } catch (Throwable) {
+      }
+      $completed = true;
+    } finally {
+      // Once the journal exists the protocol is written in every case, also when the run ends with an exception.
+      $protocol = $this->protocol($journal, $plan, $before, $after, $postError, match (true) {
+        !$completed => 'aborted',
+        $failed || $after === null => 'failed',
+        self::hasWarnings($journal) => 'warnings',
+        default => 'ok',
+      });
+      // The exception's message follows from App; without this line the terminal would not say where the journal lies.
+      if (!$completed) {
+        Out::err('pg-harden: Lauf abgebrochen — Journal ' . Text::printable($dir) . ($protocol !== null ? ', Protokoll ' . Text::printable($protocol) : '') . "\n");
+      }
     }
-    try {
-      $journal->data['finished_at'] = date(DATE_ATOM);
-      $journal->data['failed'] = $failed;
-      $journal->flush();
-    } catch (Throwable) {
-    }
+    $comparison = $after !== null ? Verifier::renderText($after['comparison']) : "\nNachprüfung nicht möglich: $postError\n";
     Out::write("\nERGEBNIS\n" . self::summary($journal) . $comparison
       . "\nJOURNAL\n" . TextRenderer::field('  Verzeichnis', Text::printable($dir) . ' (Sicherungen, Berichte vorher/nachher, Protokoll)')
+      . ($protocol !== null ? TextRenderer::field('  Protokoll', Text::printable($protocol) . ' (HTML, im Browser öffnen)') : '')
       . TextRenderer::field('  Rückgängig', 'php pg-harden.php rollback --dir=' . Text::printable($dir) . ' (gleiche Verbindung)')
       . TextRenderer::notices(null));
     return $failed || $after === null ? 2 : (Report::exitCode($after) === 1 ? 1 : (self::hasWarnings($journal) ? 3 : 0));
+  }
+
+  /** apply.html in the journal. Not being able to write it is reported, but changes neither the run nor its exit code. */
+  private function protocol(Journal $journal, array $plan, array $before, ?array $after, ?string $postError, string $outcome): ?string
+  {
+    $file = $journal->dir . '/apply.html';
+    try {
+      [$confirm, $other] = self::skippedGroups($plan['skipped']);
+      Files::write($file, HtmlRenderer::applyLog([
+        'started_at' => (string) $journal->data['started_at'],
+        'finished_at' => $journal->data['finished_at'] ?? null,
+        'server' => (string) $journal->data['server'],
+        'server_version' => (string) $journal->data['server_version'],
+        'user' => (string) $journal->data['user'],
+        'dir' => $journal->dir,
+        'outcome' => $outcome,
+        'plan' => $plan,
+        'skipped_confirm' => $confirm,
+        'skipped_other' => $other,
+        'steps' => $journal->data['steps'],
+        'files' => $journal->data['files'],
+        'sql' => $journal->data['sql'],
+        'before_counts' => $before['meta']['counts'],
+        'after' => $after,
+        'post_error' => $postError,
+      ]), exclusive: true);
+      return $file;
+    } catch (Throwable $e) {
+      Out::err('pg-harden: Protokoll ' . Text::printable($file) . ' nicht geschrieben: ' . Text::printable(strtok($e->getMessage(), "\n") ?: get_class($e)) . "\n");
+      return null;
+    }
+  }
+
+  /** @return array{0: list<string>, 1: list<array{0: string, 1: string}>} rules waiting for --include-confirm, other skipped rules with their reason */
+  private static function skippedGroups(array $skipped): array
+  {
+    $confirm = [];
+    $other = [];
+    foreach ($skipped as $entry) {
+      [$id, $why] = $entry;
+      if (($entry[2] ?? null) === 'confirm') {
+        $confirm[$id] = (string) $id;
+      } else {
+        $other[$id . "\0" . $why] = [(string) $id, (string) $why];
+      }
+    }
+    return [array_values($confirm), array_values($other)];
   }
 
   /** @return array{0: ?string[], 1: string[]} restriction to rule ids (null = all), ids released from "confirm" */
@@ -1004,19 +1068,10 @@ final class Applier
       }
     }
     if ($plan['skipped'] !== []) {
-      $confirm = [];
-      $other = [];
-      foreach ($plan['skipped'] as $entry) {
-        [$id, $why] = $entry;
-        if (($entry[2] ?? null) === 'confirm') {
-          $confirm[$id] = true;
-        } else {
-          $other[$id . "\0" . $why] = [$id, $why];
-        }
-      }
+      [$confirm, $other] = self::skippedGroups($plan['skipped']);
       $out .= "\nNICHT AUSGEFÜHRT\n";
       if ($confirm !== []) {
-        $out .= "  Brauchen eine Freigabe mit --include-confirm=<Kennung>:\n    " . TextRenderer::wrap(implode(', ', array_keys($confirm)), 4) . "\n";
+        $out .= "  Brauchen eine Freigabe mit --include-confirm=<Kennung>:\n    " . TextRenderer::wrap(implode(', ', $confirm), 4) . "\n";
       }
       if ($other !== []) {
         $out .= $confirm !== [] ? "  Aus anderen Gründen:\n" : '';
@@ -1599,8 +1654,32 @@ final class Rollback
     $log['finished_at'] = date(DATE_ATOM);
     $log['ok'] = $ok;
     // Only a complete rollback closes the journal; a failed attempt is kept under its own name and may be repeated.
-    Files::write($ok ? $logFile : $dir . '/rollback-attempt-' . date('Ymd-His') . '.json', Text::json($log), exclusive: true);
-    Out::write("\nRückweg " . ($ok ? 'abgeschlossen' : 'unvollständig — Journal prüfen') . ".\n" . TextRenderer::notices(null));
+    $attempt = 'rollback-attempt-' . date('Ymd-His');
+    $logName = $ok ? 'rollback-log.json' : "$attempt.json";
+    Files::write("$dir/$logName", Text::json($log), exclusive: true);
+    $protocol = self::protocol($ok ? "$dir/rollback.html" : "$dir/$attempt.html", $log + [
+      'server' => $ctx->server,
+      'server_version' => $ctx->version,
+      'user' => $ctx->user,
+      'dir' => $dir,
+      'apply_started_at' => (string) ($data['started_at'] ?? ''),
+      'log_file' => $logName,
+    ]);
+    Out::write("\nRückweg " . ($ok ? 'abgeschlossen' : 'unvollständig — Journal prüfen') . ".\n"
+      . ($protocol !== null ? TextRenderer::field('Protokoll', Text::printable($protocol) . ' (HTML, im Browser öffnen)') : '')
+      . TextRenderer::notices(null));
     return $ok ? 0 : 2;
+  }
+
+  /** The HTML protocol next to the rollback log. Not being able to write it is reported, but changes neither the run nor its exit code. */
+  private static function protocol(string $file, array $log): ?string
+  {
+    try {
+      Files::write($file, HtmlRenderer::rollbackLog($log), exclusive: true);
+      return $file;
+    } catch (Throwable $e) {
+      Out::err('pg-harden: Protokoll ' . Text::printable($file) . ' nicht geschrieben: ' . Text::printable(strtok($e->getMessage(), "\n") ?: get_class($e)) . "\n");
+      return null;
+    }
   }
 }

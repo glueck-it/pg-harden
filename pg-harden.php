@@ -1709,6 +1709,9 @@ final class HtmlRenderer
     .badge{display:inline-block;padding:.05rem .55rem;border-radius:999px;background:var(--kb);color:var(--k);
       font-size:.8rem;font-weight:600;white-space:nowrap}
     .chips{list-style:none;margin:.5rem 0;padding:0;display:flex;flex-wrap:wrap;gap:.4rem}
+    .banner{margin:.6rem 0;padding:.6rem .9rem;border:1px solid var(--line);border-left:4px solid var(--k);border-radius:6px;background:var(--kb)}
+    .banner strong{color:var(--k)}
+    .ids{line-height:1.9}
     .alert{margin:.5rem 0;padding:.5rem .8rem;border:1px solid var(--high);border-radius:6px;background:var(--high-bg)}
     .alert strong{color:var(--high)}
     .table-wrap{overflow-x:auto}
@@ -1780,12 +1783,6 @@ final class HtmlRenderer
         $body .= self::mapping($id, $map);
       }
     }
-    $toc[] = ['notices', 'Hinweise', null, null];
-    $nav = '';
-    foreach ($toc as [$id, $label, $count, $key]) {
-      $nav .= "<li><a href=\"#$id\">" . ($key !== null ? "<span class=\"dot k-$key\" aria-hidden=\"true\"></span>" : '') . self::esc($label)
-        . ($count !== null ? " <span class=\"count\">$count</span>" : '') . '</a></li>';
-    }
 
     // Header lines as in the text report.
     if ($client) {
@@ -1832,16 +1829,249 @@ final class HtmlRenderer
     $summary = '<section id="summary"><h2>Zusammenfassung</h2><div class="tiles">' . $tiles . '</div>'
       . self::bar($segments, $total, "Anteile aller $total Regeln: $result") . '</section>';
 
+    $body = $summary . $body . '<p class="result"><strong>Ergebnis:</strong> ' . self::esc($result) . '</p>';
+    return self::page('Der Bericht', $s['kind'], $m['server'], TextRenderer::when((string) ($m['created_at'] ?? '')), $meta, $toc, $body, $legal);
+  }
+
+  /**
+   * The protocol of apply --execute (apply.html in the journal): outcome, planned changes, what was not done, the steps, the files
+   * touched, the comparison before/after and where the journal lies. Built from the same data as the terminal output and the journal.
+   *
+   * @param array{started_at: string, finished_at: ?string, server: string, server_version: string, user: string, dir: string,
+   *   outcome: string, plan: array, skipped_confirm: list<string>, skipped_other: list<array{0: string, 1: string}>, steps: list<array>,
+   *   files: list<array>, sql: list<array>, before_counts: array, after: ?array, post_error: ?string} $log
+   */
+  public static function applyLog(array $log): string
+  {
+    [$state, $key, $text] = match ($log['outcome']) {
+      'ok' => ['Ausgeführt', 'pass', 'Alle Schritte ohne Fehler; die Nachprüfung ist gelaufen.'],
+      'warnings' => ['Ausgeführt mit Warnungen', 'medium', 'Die Schritte mit WARNUNG unten prüfen.'],
+      'failed' => ['Fehlgeschlagen', 'high', 'Mindestens ein Schritt ist gescheitert — was geschah und was zurückgenommen wurde, nennen die Schritte unten.'],
+      default => ['Abgebrochen', 'high', 'Der Lauf endete vorzeitig (Meldung im Terminal). Was bis dahin geschah, steht unten und im Journal.'],
+    };
+    // "Ausgeführt" says the steps worked, not that the instance is in order: findings left over are named in the same sentence.
+    $open = $log['after']['meta']['counts']['fail'] ?? 0;
+    if ($open > 0 && in_array($log['outcome'], ['ok', 'warnings'], true)) {
+      $text .= ' ' . TextRenderer::findings($open) . ($open === 1 ? ' bleibt' : ' bleiben') . ' offen (Vergleich unten).';
+    }
+    $cmp = $log['after']['comparison'] ?? null;
+    $tiles =self::tile($log['before_counts']['fail'] > 0 ? 'high' : 'pass', $log['before_counts']['fail'], 'Befunde vorher', '');
+    if ($log['after'] !== null) {
+      $fail = $log['after']['meta']['counts']['fail'];
+      $tiles .= self::tile($fail > 0 ? 'high' : 'pass', $fail, 'Befunde nachher', '');
+    }
+    if ($cmp !== null) {
+      foreach (Verifier::LABELS as $k => $label) {
+        $tiles .= self::tile(self::COMPARISON_KEY[$k], count($cmp[$k]), $label, 'comparison');
+      }
+    }
+    $toc = [['summary', 'Ergebnis', null, $key], ['changes', 'Geplante Änderungen', null, null]];
+    $body = "<section id=\"summary\"><h2>Ergebnis</h2><p class=\"banner k-$key\"><strong>" . self::esc($state) . '</strong> — ' . self::esc($text) . '</p>'
+      . "<div class=\"tiles\">$tiles</div></section>" . self::plannedChanges($log);
+
+    if ($log['skipped_confirm'] !== [] || $log['skipped_other'] !== []) {
+      $toc[] = ['skipped', 'Nicht ausgeführt', count($log['skipped_confirm']) + count($log['skipped_other']), 'skip'];
+      $body .= '<section id="skipped"><h2>Nicht ausgeführt</h2>';
+      if ($log['skipped_confirm'] !== []) {
+        $body .= '<p>Brauchen eine Freigabe mit <code>--include-confirm=&lt;Kennung&gt;</code>:</p><p class="ids">'
+          . implode(', ', array_map(fn($id) => '<code class="id">' . self::esc($id) . '</code>', $log['skipped_confirm'])) . '</p>';
+      }
+      if ($log['skipped_other'] !== []) {
+        $rows = '';
+        foreach ($log['skipped_other'] as [$id, $why]) {
+          $rows .= '<tr><td class="key"><code class="id">' . self::esc($id) . '</code></td><td data-label="Grund">' . self::esc($why) . '</td></tr>';
+        }
+        $body .= ($log['skipped_confirm'] !== [] ? '<h3>Aus anderen Gründen</h3>' : '')
+          . "<div class=\"table-wrap\"><table class=\"stack\"><thead><tr><th scope=\"col\">Regel</th><th scope=\"col\">Grund</th></tr></thead><tbody>$rows</tbody></table></div>";
+      }
+      $body .= '</section>';
+    }
+
+    $toc[] = ['steps', 'Schritte', count($log['steps']), null];
+    $rows = '';
+    foreach ($log['steps'] as $s) {
+      $rows .= '<tr><td class="num">' . self::esc(self::clock((string) ($s['at'] ?? ''))) . '</td><td class="state">' . self::stepBadge((string) $s['status'])
+        . '</td><td data-label="Phase">' . self::esc($s['phase']) . '</td><td data-label="Meldung">' . self::esc($s['message']) . '</td></tr>';
+    }
+    $body .= '<section id="steps"><h2>Schritte</h2>' . ($rows === '' ? '<p class="note">Keine Schritte protokolliert.</p>'
+      : "<div class=\"table-wrap\"><table class=\"stack\"><thead><tr><th scope=\"col\">Zeit</th><th scope=\"col\">Status</th><th scope=\"col\">Phase</th>"
+        . "<th scope=\"col\">Meldung</th></tr></thead><tbody>$rows</tbody></table></div>") . '</section>';
+
+    if ($log['files'] !== []) {
+      $toc[] = ['files', 'Dateien', count($log['files']), null];
+      $rows = '';
+      foreach ($log['files'] as $f) {
+        $rows .= '<tr><td><code>' . self::esc($f['path']) . '</code></td><td data-label="Aktion">' . ($f['action'] === 'created' ? 'angelegt' : 'geändert')
+          . '</td><td data-label="Sicherung">' . ($f['backup'] === null ? '—' : '<code>' . self::esc($f['backup']) . '</code>') . '</td></tr>';
+      }
+      $body .= '<section id="files"><h2>Dateien</h2><p class="note">Auf dem Server geändert oder angelegt; die Sicherungen liegen im Journal.</p>'
+        . "<div class=\"table-wrap\"><table class=\"stack\"><thead><tr><th scope=\"col\">Pfad</th><th scope=\"col\">Aktion</th><th scope=\"col\">Sicherung</th>"
+        . "</tr></thead><tbody>$rows</tbody></table></div></section>";
+    }
+
+    if ($cmp !== null) {
+      $toc[] = ['comparison', 'Vergleich', null, null];
+      $body .= self::comparison($cmp);
+    } elseif ($log['post_error'] !== null) {
+      $toc[] = ['comparison', 'Nachprüfung', null, 'high'];
+      $body .= '<section id="comparison"><h2>Nachprüfung</h2><p class="alert"><strong>Nicht möglich:</strong> ' . self::esc($log['post_error']) . '</p></section>';
+    }
+
+    $toc[] = ['journal', 'Journal', null, null];
+    $body .= '<section id="journal"><h2>Journal</h2><dl class="meta">' . self::fields([
+      ['Verzeichnis', $log['dir']],
+      ['Rückgängig', 'php pg-harden.php rollback --dir=' . $log['dir'] . ' (gleiche Verbindung)'],
+      ['Dateien', 'apply.html (dieses Protokoll), apply-log.json (Protokoll der Schritte), report-before.json, report-after.json, backup/ (Sicherungen)'],
+    ]) . '</dl></section>';
+
+    $meta = self::fields([
+      ['Server', $log['server'] . ' · PostgreSQL ' . $log['server_version'] . ' · Benutzer ' . $log['user']],
+      ['Lauf', 'Ausführung · begonnen ' . TextRenderer::when($log['started_at'])
+        . ' · ' . ($log['finished_at'] !== null ? 'beendet ' . TextRenderer::when($log['finished_at']) : 'nicht beendet')],
+      ['Journal', $log['dir']],
+    ]);
+    return self::page('Das Protokoll', 'apply-Protokoll', $log['server'], TextRenderer::when($log['started_at']), $meta, $toc, $body, null);
+  }
+
+  /**
+   * The protocol of rollback (next to rollback-log.json or rollback-attempt-….json in the journal): outcome, steps, journal.
+   *
+   * @param array{started_at: string, finished_at: string, server: string, server_version: string, user: string, dir: string,
+   *   apply_started_at: string, ok: bool, steps: list<array{status: string, message: string}>, log_file: string} $log
+   */
+  public static function rollbackLog(array $log): string
+  {
+    [$state, $key, $text] = $log['ok']
+      ? ['Rückweg abgeschlossen', 'pass', 'Das Journal ist damit abgeschlossen (rollback-log.json).']
+      : ['Rückweg unvollständig', 'high', 'Schritte unten und Journal prüfen; derselbe Befehl wiederholt den Rückweg.'];
+    $rows = '';
+    foreach ($log['steps'] as $s) {
+      $rows .= '<tr><td class="state">' . self::stepBadge((string) $s['status']) . '</td><td data-label="Meldung">' . self::esc($s['message']) . '</td></tr>';
+    }
+    $body = "<section id=\"summary\"><h2>Ergebnis</h2><p class=\"banner k-$key\"><strong>" . self::esc($state) . '</strong> — ' . self::esc($text) . '</p></section>'
+      . '<section id="steps"><h2>Schritte</h2>' . ($rows === '' ? '<p class="note">Nichts zurückzunehmen.</p>'
+        : "<div class=\"table-wrap\"><table class=\"stack\"><thead><tr><th scope=\"col\">Status</th><th scope=\"col\">Meldung</th></tr></thead>"
+          . "<tbody>$rows</tbody></table></div>") . '</section>'
+      . '<section id="journal"><h2>Journal</h2><dl class="meta">' . self::fields([
+        ['Verzeichnis', $log['dir']],
+        ['apply vom', TextRenderer::when($log['apply_started_at'])],
+        ['Protokoll', $log['log_file']],
+      ]) . '</dl></section>';
+    $toc = [['summary', 'Ergebnis', null, $key], ['steps', 'Schritte', count($log['steps']), null], ['journal', 'Journal', null, null]];
+    $meta = self::fields([
+      ['Server', $log['server'] . ' · PostgreSQL ' . $log['server_version'] . ' · Benutzer ' . $log['user']],
+      ['Lauf', 'begonnen ' . TextRenderer::when($log['started_at']) . ' · beendet ' . TextRenderer::when($log['finished_at'])],
+      ['Journal', $log['dir']],
+    ]);
+    return self::page('Das Protokoll', 'rollback-Protokoll', $log['server'], TextRenderer::when($log['started_at']), $meta, $toc, $body, null);
+  }
+
+  /** The planned changes of apply as in the terminal, each SQL statement with its state from the journal. */
+  private static function plannedChanges(array $log): string
+  {
+    $plan = $log['plan'];
+    $out = '<section id="changes"><h2>Geplante Änderungen</h2>';
+    if ($plan['conf'] === [] && $plan['hba'] === [] && $plan['sql'] === []) {
+      return $out . '<p class="note">keine</p></section>';
+    }
+    if ($plan['conf'] !== []) {
+      $rows = '';
+      foreach ($plan['conf'] as $a) {
+        $rows .= '<tr><td><code>' . self::esc($a['name']) . '</code></td><td data-label="Wert"><code>' . self::esc("'" . $a['value'] . "'") . '</code></td>'
+          . '<td data-label="Regel"><code class="id">' . self::esc($a['rule']) . '</code>'
+          . ($a['restart'] ? ' <span class="badge k-medium">Neustart nötig, wird nicht ausgeführt</span>' : '') . '</td></tr>';
+      }
+      $out .= '<h3>Parameter → <code>conf.d/90-pg-harden.conf</code></h3><div class="table-wrap"><table class="stack"><thead><tr>'
+        . "<th scope=\"col\">Parameter</th><th scope=\"col\">Wert</th><th scope=\"col\">Regel</th></tr></thead><tbody>$rows</tbody></table></div>";
+    }
+    foreach ($plan['notes'] as $note) {
+      $out .= '<p class="note"><strong>Hinweis:</strong> ' . self::esc($note) . '</p>';
+    }
+    if ($plan['hba'] !== []) {
+      $rows = '';
+      foreach ($plan['hba'] as $a) {
+        $rows .= '<tr><td class="num">Zeile ' . self::esc($a['line']) . '</td><td data-label="Änderung">' . ($a['kind'] === 'type' ? 'Typ ' : 'Methode ')
+          . self::esc(implode('/', $a['from']) . ' → ' . $a['to']) . '</td><td data-label="Regel"><code class="id">' . self::esc($a['rule']) . '</code></td></tr>';
+      }
+      $out .= '<h3><code>pg_hba.conf</code></h3><p class="note">Sicherung, Prüfung durch den Server, Anmeldetest nach dem Neuladen (der Test deckt nur die '
+        . 'Anmeldung dieses Werkzeugs ab, nicht Anwendungen und andere Rollen).</p><div class="table-wrap"><table class="stack"><thead><tr>'
+        . "<th scope=\"col\">Zeile</th><th scope=\"col\">Änderung</th><th scope=\"col\">Regel</th></tr></thead><tbody>$rows</tbody></table></div>";
+    }
+    // State of each statement from the journal; a statement the run never reached has no entry. NUL cannot occur in database names.
+    $done = [];
+    foreach ($log['sql'] as $q) {
+      $done[$q['database'] . "\0" . $q['rule'] . "\0" . (string) ($q['fix_sql'] ?? '')] = $q['status'];
+    }
+    foreach ($plan['sql'] as $db => $items) {
+      $rows = '';
+      foreach ($items as $i) {
+        [$label, $key] = match ($done[$db . "\0" . $i['rule'] . "\0" . (string) ($i['fix_sql'] ?? '')] ?? null) {
+          'committed' => ['ausgeführt', 'pass'],
+          'failed' => ['fehlgeschlagen', 'high'],
+          'pending' => ['offen', 'incomplete'],
+          default => ['nicht ausgeführt', 'skip'],
+        };
+        $rows .= '<tr><td class="key"><code class="id">' . self::esc($i['rule']) . '</code></td><td class="state"><span class="badge k-' . $key . '">' . $label
+          . '</span></td><td data-label="Anweisung"><code>' . self::esc($i['fix_sql']) . '</code></td></tr>';
+      }
+      $out .= '<h3>SQL in Datenbank ' . self::esc($db) . '</h3><div class="table-wrap"><table class="stack"><thead><tr><th scope="col">Regel</th>'
+        . "<th scope=\"col\">Stand</th><th scope=\"col\">Anweisung</th></tr></thead><tbody>$rows</tbody></table></div>";
+    }
+    return $out . '</section>';
+  }
+
+  /** Header fields as dt/dd pairs, values escaped. */
+  private static function fields(array $fields): string
+  {
+    $out = '';
+    foreach ($fields as [$label, $value]) {
+      $out .= '<dt>' . self::esc($label) . '</dt><dd>' . self::esc($value) . '</dd>';
+    }
+    return $out;
+  }
+
+  /** Status of a journal step as a badge: OK, WARNUNG, FEHLER; anything else grey. */
+  private static function stepBadge(string $status): string
+  {
+    $key = match ($status) {
+      'OK' => 'pass',
+      'WARNUNG' => 'medium',
+      'FEHLER' => 'high',
+      default => 'skip',
+    };
+    return "<span class=\"badge k-$key\">" . self::esc($status) . '</span>';
+  }
+
+  /** "2026-10-28T12:00:05+00:00" → "12:00:05"; anything else as it is. */
+  private static function clock(string $atom): string
+  {
+    $d = preg_match('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/D', $atom) === 1 ? DateTimeImmutable::createFromFormat(DATE_ATOM, $atom) : false;
+    return $d === false ? $atom : $d->format('H:i:s');
+  }
+
+  /**
+   * The frame of every page: the CSP admitting only the stylesheet, the header with meta fields, confidentiality note and table of
+   * contents, the sections, the notices. $toc lists [id, label, count|null, colour key|null] with fixed ids and keys; $meta and $body
+   * are HTML whose values are already escaped.
+   */
+  private static function page(string $document, string $kind, string $server, string $when, string $meta, array $toc, string $body, ?string $legal): string
+  {
+    $toc[] = ['notices', 'Hinweise', null, null];
+    $nav = '';
+    foreach ($toc as [$id, $label, $count, $key]) {
+      $nav .= "<li><a href=\"#$id\">" . ($key !== null ? "<span class=\"dot k-$key\" aria-hidden=\"true\"></span>" : '') . self::esc($label)
+        . ($count !== null ? " <span class=\"count\">$count</span>" : '') . '</a></li>';
+    }
     $notices = '<footer id="notices"><h2>Hinweise</h2>'
       . ($legal !== null ? '<p><strong>Bestimmungsgemäße Verwendung:</strong> ' . self::esc($legal) . '</p>' : '')
       . '<p>' . self::esc(RESPONSIBILITY_NOTICE) . '</p></footer>';
     $style = self::STYLE;
     $hash = base64_encode(hash('sha256', $style, true));
-    $title = self::esc('pg-harden — ' . $s['kind'] . ' ' . $m['server']);
-    $tool = self::esc('pg-harden ' . PG_HARDEN_VERSION . ' · ' . $s['kind'] . ' · ' . TextRenderer::when((string) ($m['created_at'] ?? '')));
-    $kind = self::esc($s['kind']);
-    $server = self::esc($m['server']);
-    $resultHtml = self::esc($result);
+    $title = self::esc('pg-harden — ' . $kind . ' ' . $server);
+    $tool = self::esc('pg-harden ' . PG_HARDEN_VERSION . ' · ' . $kind . ' · ' . $when);
+    $kindHtml = self::esc($kind);
+    $serverHtml = self::esc($server);
+    $documentHtml = self::esc($document);
     return <<<HTML
       <!doctype html>
       <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1852,15 +2082,13 @@ final class HtmlRenderer
       </head><body>
       <header>
       <p class="tool">{$tool}</p>
-      <h1>{$kind} <span class="host">{$server}</span></h1>
+      <h1>{$kindHtml} <span class="host">{$serverHtml}</span></h1>
       <dl class="meta">{$meta}</dl>
-      <p class="confidential">Der Bericht enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen.</p>
+      <p class="confidential">{$documentHtml} enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen.</p>
       <nav class="toc" aria-label="Inhalt"><ol>{$nav}</ol></nav>
       </header>
       <main>
-      {$summary}
       {$body}
-      <p class="result"><strong>Ergebnis:</strong> {$resultHtml}</p>
       </main>
       {$notices}
       </body></html>
@@ -1878,7 +2106,7 @@ final class HtmlRenderer
   {
     $class = "tile k-$key" . ($main ? ' tile-main' : ($n === 0 ? ' zero' : ''));
     $inner = "<span class=\"n\">$n</span> <span class=\"l\">" . self::esc($label) . '</span>';
-    return $n > 0 ? "<a class=\"$class\" href=\"#$target\">$inner</a>" : "<div class=\"$class\">$inner</div>";
+    return $n > 0 && $target !== '' ? "<a class=\"$class\" href=\"#$target\">$inner</a>" : "<div class=\"$class\">$inner</div>";
   }
 
   /** All rules as one stacked bar: geometry as SVG attributes, colour from the stylesheet (the CSP admits no style attribute). */

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **HTML run log of `apply` and `rollback` in the journal:** `apply --execute` writes `apply.html` next to `apply-log.json` — outcome
+  (executed, with warnings, failed, aborted), tiles for findings before/after and the comparison, the planned changes with the state of each
+  SQL statement from the journal, what was not done and why, the steps with time and status, the files touched with their backups, the
+  comparison before/after (or why the re-check was impossible) and how to roll back. It is written in a `finally` once the journal exists, so
+  a run that ends with an exception leaves it as well. `rollback` writes `rollback.html` (complete) or `rollback-attempt-<time>.html` next to
+  its log. The terminal output stays text and names the file; not being able to write the protocol is reported on stderr and changes neither
+  the run nor its exit code. Same frame as the report (`HtmlRenderer::page`: CSP by hash, no external resources, everything escaped).
 - **HTML report rebuilt (`check`, `verify`, `client` with `--format=html`):** the outline of the text report — header, summary,
   comparison, findings by severity, errors, rules to review, incomplete, skipped and clean rules, mappings, result, notices — instead of
   one table sorted by attention. On top a table of contents and an overview (tiles per severity and state, one bar over all rules);

@@ -75,16 +75,55 @@ $compared = $report;
 $compared['comparison'] = Verifier::compare($previous, $report);
 $client = ['meta' => ['mode' => 'client', 'counts' => array_fill_keys(array_keys($counts), 0)] + $meta, 'results' => [], 'mappings' => []];
 
+// Protocols of apply and rollback: plan, journal and server values are just as untrusted.
+$applyLog = [
+  'started_at' => '2026-10-28T12:00:00+00:00', 'finished_at' => '2026-10-28T12:00:09+00:00', 'server' => "srv $evil", 'server_version' => "18 $evil",
+  'user' => "usr $evil", 'dir' => "/root/j $evil", 'outcome' => 'failed',
+  'plan' => [
+    'conf' => [['rule' => "log.$evil", 'name' => "name $evil", 'value' => "wert $evil", 'restart' => true]],
+    'hba' => [['rule' => 'hba.trust', 'line' => 117, 'kind' => 'method', 'from' => ["trust $evil"], 'to' => "scram $evil"]],
+    'sql' => ["db $evil" => [
+      ['rule' => 'db.public_schema_create', 'object' => 'o', 'fix_sql' => "REVOKE $evil;"],
+      ['rule' => 'code.secdef_search_path', 'object' => 'o', 'fix_sql' => "ALTER $evil;"],
+    ]],
+    'notes' => ["Hinweis $evil"],
+  ],
+  'skipped_confirm' => ["hba.$evil"], 'skipped_other' => [["x.$evil", "Grund $evil"]],
+  'steps' => [
+    ['at' => '2026-10-28T12:00:01+00:00', 'phase' => "Phase $evil", 'status' => 'OK', 'message' => "ok $evil"],
+    ['at' => "zeit $evil", 'phase' => 'SQL', 'status' => "unbekannt $evil", 'message' => "fehler $evil"],
+  ],
+  'files' => [['path' => "/etc/$evil", 'action' => 'modified', 'backup' => "backup/01-$evil"], ['path' => '/x', 'action' => 'created', 'backup' => null]],
+  'sql' => [['database' => "db $evil", 'rule' => 'db.public_schema_create', 'fix_sql' => "REVOKE $evil;", 'rollback_sql' => null, 'status' => 'committed']],
+  'before_counts' => $counts, 'after' => $compared, 'post_error' => null,
+];
+$aborted = ['outcome' => 'aborted', 'finished_at' => null, 'after' => null, 'post_error' => "kaputt $evil", 'steps' => [], 'files' => [], 'sql' => []] + $applyLog;
+$aborted['plan'] = ['conf' => [], 'hba' => [], 'sql' => [], 'notes' => []];
+$rollbackLog = [
+  'started_at' => '2026-10-28T13:00:00+00:00', 'finished_at' => '2026-10-28T13:00:02+00:00', 'server' => "srv $evil", 'server_version' => '18',
+  'user' => 'postgres', 'dir' => "/root/j $evil", 'apply_started_at' => "apply $evil", 'ok' => false, 'log_file' => 'rollback-attempt-1.json',
+  'steps' => [['status' => 'FEHLER', 'message' => "nicht $evil"], ['status' => 'WARNUNG', 'message' => 'w']],
+];
+
 $cases = ['check' => $report, 'verify' => $compared, 'client' => $client];
+$pages = [];
 foreach ($cases as $name => $r) {
   try {
-    $html = HtmlRenderer::render($r);
-    $text = TextRenderer::render($r);
+    $pages[$name] = HtmlRenderer::render($r);
+    $check("$name: Textbericht entsteht", TextRenderer::render($r) !== '');
   } catch (Throwable $e) {
     $check("$name: rendert ohne Fehler ({$e->getMessage()})", false);
-    continue;
   }
-  $check("$name: Textbericht entsteht", $text !== '');
+}
+foreach (['apply' => fn() => HtmlRenderer::applyLog($applyLog), 'apply-abgebrochen' => fn() => HtmlRenderer::applyLog($aborted),
+  'rollback' => fn() => HtmlRenderer::rollbackLog($rollbackLog), 'rollback-ok' => fn() => HtmlRenderer::rollbackLog(['ok' => true] + $rollbackLog)] as $name => $make) {
+  try {
+    $pages[$name] = $make();
+  } catch (Throwable $e) {
+    $check("$name: rendert ohne Fehler ({$e->getMessage()})", false);
+  }
+}
+foreach ($pages as $name => $html) {
 
   // One stylesheet, admitted by its hash; nothing else may load or run.
   $check("$name: genau ein style-Element", substr_count($html, '<style>') === 1 && substr_count($html, '</style>') === 1);
@@ -129,6 +168,25 @@ foreach ($cases as $name => $r) {
   $check("$name: ids eindeutig und fest", count($ids[1]) === count(array_unique($ids[1])) && preg_grep('~^[a-z0-9-]+$~', $ids[1], PREG_GREP_INVERT) === []);
   $check("$name: jede Sprungmarke hat ihr Ziel", array_diff(array_map(fn($h) => substr($h, 1), $hrefs[1]), $ids[1]) === []);
 }
+
+$html = $pages['apply'] ?? '';
+$check('apply: Ergebnis fehlgeschlagen', str_contains($html, '<p class="banner k-high"><strong>Fehlgeschlagen</strong>'));
+$check('apply: SQL-Stand aus dem Journal', str_contains($html, '<span class="badge k-pass">ausgeführt</span></td><td data-label="Anweisung"><code>REVOKE &lt;script&gt;')
+  && str_contains($html, '<span class="badge k-skip">nicht ausgeführt</span></td><td data-label="Anweisung"><code>ALTER &lt;script&gt;'));
+$check('apply: unbekannter Schrittstatus grau, Zeit unverändert', str_contains($html, '<span class="badge k-skip">unbekannt &lt;script&gt;')
+  && str_contains($html, '<td class="num">zeit &lt;script&gt;') && str_contains($html, '<td class="num">12:00:01</td>'));
+$check('apply: Neustart, Freigabe, Dateien, Vergleich, Journal', str_contains($html, 'Neustart nötig') && str_contains($html, 'id="skipped"')
+  && str_contains($html, 'id="files"') && str_contains($html, 'id="comparison"') && str_contains($html, 'rollback --dir=/root/j &lt;script&gt;'));
+$html = $pages['apply-abgebrochen'] ?? '';
+$check('apply abgebrochen: nicht beendet, Nachprüfung mit Meldung, keine leeren Abschnitte', str_contains($html, '<strong>Abgebrochen</strong>')
+  && str_contains($html, 'nicht beendet') && str_contains($html, '<strong>Nicht möglich:</strong> kaputt &lt;script&gt;')
+  && str_contains($html, 'Keine Schritte protokolliert') && !str_contains($html, 'id="files"') && str_contains($html, '<p class="note">keine</p>'));
+$okLog = HtmlRenderer::applyLog(['outcome' => 'ok'] + $applyLog);
+$check('apply ohne Fehler: offene Befunde im Ergebnissatz', str_contains($okLog, '<strong>Ausgeführt</strong> — Alle Schritte ohne Fehler; die Nachprüfung ist gelaufen. 4 Befunde bleiben offen (Vergleich unten).'));
+$check('rollback: unvollständig mit Wiederholungshinweis', str_contains($pages['rollback'] ?? '', '<strong>Rückweg unvollständig</strong>')
+  && str_contains($pages['rollback'] ?? '', 'rollback-attempt-1.json'));
+$check('rollback: abgeschlossen', str_contains($pages['rollback-ok'] ?? '', '<p class="banner k-pass"><strong>Rückweg abgeschlossen</strong>'));
+$check('Protokolle nennen sich Protokoll', str_contains($pages['rollback'] ?? '', 'Das Protokoll enthält Rollen-'));
 
 $html = HtmlRenderer::render($compared);
 $check('verify: Vergleichsabschnitt', str_contains($html, 'id="comparison"') && str_contains($html, 'Behoben 1') && str_contains($html, 'Neu 0'));

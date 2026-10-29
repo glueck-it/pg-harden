@@ -172,8 +172,10 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   genau den Formen, die der Regelkatalog erzeugt (Tabellen nur als Liste von `pg_catalog`-Objekten der Katalog-Sichtbarkeit, nie eine
   Anwendungstabelle), und nur mit Rückweg. Der Rückweg muss die genaue Umkehrung des Fixes sein. Der Server selbst lehnt Mehrfachanweisungen ab
   (`prepare`). Der Rückweg steht im Journal, **bevor** committet wird.
-- **Journal** (`--dir`, neues Verzeichnis): `apply-log.json`, `backup/`, `report-before.json`, `report-after.json`. Nach dem Lauf
-  prüft `apply` mit **neuen** Verbindungen erneut und zeigt behoben/neu/offen.
+- **Journal** (`--dir`, neues Verzeichnis): `apply-log.json`, `backup/`, `report-before.json`, `report-after.json` und `apply.html`, das
+  Protokoll des Laufs für den Browser (Ergebnis, geplante Änderungen, Schritte, Dateien, Vergleich; geschrieben, sobald das Journal angelegt ist, auch wenn der Lauf danach scheitert
+  oder abbricht).
+  Nach dem Lauf prüft `apply` mit **neuen** Verbindungen erneut und zeigt behoben/neu/offen.
 - **`rollback --dir=<Journal>`** spielt die Sicherungen zurück, lädt neu, prüft eine neue Anmeldung und führt die
   gespeicherten Rückweg-Anweisungen aus. Das Journal wird nur angenommen, wenn es dem ausführenden Benutzer gehört und für andere
   unzugänglich ist, zum selben Cluster gehört (Systemkennung, Datenverzeichnis) und nur Pfade nennt, die `apply` auf diesem Server
@@ -181,7 +183,8 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   Ein unvollständiger Rückweg (Fehler oder Abbruch) schreibt kein `rollback-log.json` und lässt sich mit demselben Befehl wiederholen; er spielt
   dann dieselben Sicherungen erneut zurück und führt alle Rückweg-Anweisungen des Journals erneut aus (bereits gelaufene ändern nichts; ein
   zwischenzeitliches `REVOKE` Dritter wird dabei ebenfalls zurückgenommen). Vollständig ist er, wenn er „Rückweg abgeschlossen“ meldet und
-  `rollback-log.json` existiert. Während ein Rückweg mit Dateien läuft, unterbrechen ihn Strg+C, Strg+\, `TERM` und `HUP` nicht (wo `pcntl`
+  `rollback-log.json` existiert. Jeder Versuch legt neben sein Protokoll eine Fassung für den Browser (`rollback.html` bzw.
+  `rollback-attempt-<Zeit>.html`). Während ein Rückweg mit Dateien läuft, unterbrechen ihn Strg+C, Strg+\, `TERM` und `HUP` nicht (wo `pcntl`
   vorhanden ist); andere Signale wie `kill -9` beenden ihn weiterhin — dann denselben Befehl wiederholen. Außerhalb von Windows braucht ein
   Rückweg mit Dateien die PHP-Erweiterungen `pcntl` und `posix`.
 - Ohne Terminal verlangt `--execute` zusätzlich `--yes`; ein zweiter `apply` gleichzeitig auf demselben Server wird abgewiesen.

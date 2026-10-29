@@ -170,14 +170,17 @@ current run; otherwise it is reported as "not comparable".
   shapes the rule catalog produces (a list of `pg_catalog` objects for catalog visibility, never an application table), and only with a way back.
   The way back must be the exact inverse of the fix. The server itself refuses multiple statements (`prepare`). The way back is in the journal
   **before** the commit.
-- **Journal** (`--dir`, new directory): `apply-log.json`, `backup/`, `report-before.json`, `report-after.json`. After the run `apply` checks
-  again with **new** connections and shows fixed/new/open.
+- **Journal** (`--dir`, new directory): `apply-log.json`, `backup/`, `report-before.json`, `report-after.json` and `apply.html`, the
+  run log for the browser (outcome, planned changes, steps, files, comparison; written as soon as the journal exists, also when the run then
+  fails or aborts). After the
+  run `apply` checks again with **new** connections and shows fixed/new/open.
 - **`rollback --dir=<journal>`** restores the backups, reloads, tests a new login and runs the stored rollback statements. The journal is accepted
   only if it belongs to the executing user and is inaccessible to others, belongs to the same cluster (system identifier, data directory) and
   names only paths `apply` would write on this server. A journal can be rolled back only once. Later changes by third parties to the same files are
   overwritten. An incomplete rollback (error or interruption) writes no `rollback-log.json` and can be repeated with the same command; it then
   restores the same backups again and runs all rollback statements of the journal again (those that already ran change nothing; a `REVOKE` made
-  by someone else in between is undone as well). It is complete when it reports "Rückweg abgeschlossen" and `rollback-log.json` exists. While a
+  by someone else in between is undone as well). It is complete when it reports "Rückweg abgeschlossen" and `rollback-log.json` exists. Each
+  attempt leaves an HTML run log for the browser next to its log (`rollback.html`, or `rollback-attempt-<time>.html`). While a
   rollback with files runs, Ctrl+C, Ctrl+\, `TERM` and `HUP` do not interrupt it (where `pcntl` is available); other signals such as `kill -9`
   still end it — then run the same command again. Outside Windows a rollback with files needs the PHP extensions `pcntl` and `posix`.
 - Without a terminal `--execute` additionally requires `--yes`; a second simultaneous `apply` on the same server is refused.
