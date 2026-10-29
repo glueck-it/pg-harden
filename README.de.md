@@ -169,7 +169,8 @@ genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erschei
   einmal gelesen; `apply` legt höchstens eine Verzeichnisebene an. Eine Datei von root in einem Verzeichnis des Dienstkontos wird an Ort und
   Stelle geschrieben, wenn das Dienstkonto sie beschreiben darf, sonst abgewiesen. Windows kennt keinen Identitätswechsel:
   dort hält ein Helfer (`WindowsPin`) die Wurzel- und Zielverzeichnisse während der gesamten Dateiphase von `apply` und `rollback` als offene
-  Handles ohne `FILE_SHARE_DELETE` (ein leeres zusätzlich ohne `FILE_SHARE_WRITE`) fest und prüft über diese Handles vor und nach jedem Schreibvorgang, dass jedes
+  Handles ohne `FILE_SHARE_DELETE` (alle außer dem Datenverzeichnis zusätzlich ohne `FILE_SHARE_WRITE`) fest, ebenso die gerade geschriebene
+  Datei von ihrer Prüfung bis zum Ende des Schreibens, und prüft über diese Handles vor und nach jedem Schreibvorgang, dass jedes
   Verzeichnis noch ein gewöhnliches Verzeichnis unter seinem endgültigen Pfad ist (`GetFinalPathNameByHandleW`): kein Verzeichnis lässt sich
   zwischen Prüfung und Schreiben wegbenennen und durch eine Junction ersetzen, und ein an Ort und Stelle verändertes bricht die Operation ab;
   ohne laufenden Helfer wird nichts geschrieben; ACLs und `postmaster.pid` werden über das offene
@@ -350,7 +351,8 @@ Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
 
 ## Stand
 
-0.4.0 (unveröffentlicht): **Kommandozeile neu geschnitten** — `-o NAME` schreibt JSON und HTML, `-f NAME` vergleicht mit einem früheren
+0.4.0 (29.10.2026): **Sicherheitskorrektur** für Windows (als Administrator konnte ein Konto, dem das Datenverzeichnis oder das
+geprüfte Profil gehört, Lese- und Schreibzugriffe über eine Junction umlenken; betroffen 0.3.0 bis 0.3.2), **Kommandozeile neu geschnitten** — `-o NAME` schreibt JSON und HTML, `-f NAME` vergleicht mit einem früheren
 Bericht, Platzhalter wie `log_filename` für das Datum; `--format`, `--out`, `--previous` und der Befehl `verify` entfallen
 (`verify` ist jetzt `check -f`). Windows-Schreibseite hält die Serververzeichnisse gegen einen Tausch gegen Junctions fest über offene Verzeichnis-Handles ohne `FILE_SHARE_DELETE` (`WindowsPin`), ACL-Lesen über das
 offene Datei-Handle (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), enge ACLs für Journale und Ausgabedateien unter Windows (beim Laden eines Journals geprüft), Vergleich auch für

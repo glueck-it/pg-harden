@@ -1,10 +1,12 @@
-# Versionsmatrix PostgreSQL 14 bis 19 (Stand 28.10.2026, Programmstand 0.4.0 unveröffentlicht)
+# Versionsmatrix PostgreSQL 14 bis 19 (Stand 29.10.2026, Programmstand 0.4.0)
 
 Getestet mit `tests/run-version-matrix.sh`: je Version ein Container (`postgres:14-trixie` … `postgres:18-trixie`, `postgres:19rc1`,
 Debian 13, PHP 8.4.27, als root im Container, Datenverzeichnis lokal, Vertrauensanmeldung wie in `lab/`). Die Versionen meldete der
 Server selbst (`show server_version`): 14.24, 15.19, 16.15, 17.11, 18.6 und 19rc1 — jeweils der Stand der Image-Tags am 26.10.2026,
-am 28.10.2026 unverändert. Mit Programmstand 0.3.0 (24.10.2026), 0.3.1 (25.10.2026) und 0.3.2 (26.10.2026) ergab die Matrix dieselbe
-Statustabelle; mit 0.4.0 (28.10.2026) kommen nur die Zeilen der neuen Regeln hinzu, die übrigen sind unverändert.
+am 28. und 29.10.2026 unverändert. Mit Programmstand 0.3.0 (24.10.2026), 0.3.1 (25.10.2026) und 0.3.2 (26.10.2026) ergab die Matrix
+dieselbe Statustabelle; mit 0.4.0 (28.10.2026) kommen nur die Zeilen der neuen Regeln hinzu, die übrigen sind unverändert. Mit dem
+Endstand von 0.4.0 (29.10.2026, Kommandozeile `-o`/`-f`) erneut gefahren: Statustabelle gleich, `lab-matrix.sh` und
+`lab-visibility.sh` in allen sechs Versionen grün.
 PostgreSQL 19 ist ein Release Candidate; die Veröffentlichung ist laut der Ankündigung von RC 1 auf postgresql.org (Stand 24.10.2026)
 für den 19.11.2026 geplant. Die Spalte 19rc1 ist eine Vorabprüfung, kein Freigabevermerk.
 
@@ -45,23 +47,25 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
   einem nachgestellten Abbruch mit Programmstand 0.3.1 auf Windows 11 (PostgreSQL 18.6, Wegwerf-Cluster mit `initdb`), am selben Tag
   `check` mit Programmstand 0.3.2 dort normal und mit einer gefälschten Prozessnummer in `postmaster.pid` (als nicht nachgewiesen
   gemeldet, der fremde Prozess nicht gelesen).
-- **Programmstand 0.4.0 (unveröffentlicht), 28.10.2026:**
-  - `tests/windows-redirect.php` auf Windows 11 (Wegwerf-Ordner unter `%TEMP%`, ohne Administratorrechte), 61 Fälle grün:
+- **Programmstand 0.4.0, 28. und 29.10.2026:**
+  - `tests/windows-redirect.php` auf Windows 11 (Wegwerf-Ordner unter `%TEMP%`, ohne Administratorrechte), 65 Fälle grün (der Fall mit symbolischem Link am Namen ohne Symlink-Recht übersprungen):
     Wegprüfung für `client --user` und `check` (auch `postmaster.pid` im Datenverzeichnis), ACL über das offene Handle
-    (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), Verzeichnissperre `WindowsPin` (ohne `FILE_SHARE_DELETE`; dass leere
-    Verzeichnisse auch ohne `FILE_SHARE_WRITE` gehalten werden, ist Bauart, das Umwandeln an Ort und Stelle ist nicht nachgestellt) für
-    `ServerFiles::overwrite`, `create`, `makeDir`, `restore` und `Journal::backup` gegen Junctions,
-    Umbenennen im festgehaltenen Datenverzeichnis weiter möglich, Abbruch ohne aktive Sperre und nach beendetem Helfer,
+    (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), Verzeichnissperre `WindowsPin` (ohne `FILE_SHARE_DELETE`; dass alle Verzeichnisse
+    außer dem Datenverzeichnis auch ohne `FILE_SHARE_WRITE` gehalten werden, ist Bauart, das Umwandeln an Ort und Stelle ist nicht nachgestellt) für
+    `ServerFiles::overwrite`, `create`, `makeDir`, `restore` und `Journal::backup` gegen Junctions, Zieldatei während des Schreibens
+    gehalten (nicht umbenennbar, nicht löschbar, beschreibbar, danach frei; mit `FILE_READ_DATA` am Handle, ohne nahm es an der
+    Freigabeprüfung nicht teil — gemessen; neue Datei vom Helfer angelegt und gehalten, vorhandene von `create` abgewiesen), Umbenennen im festgehaltenen Datenverzeichnis weiter möglich, Abbruch ohne aktive Sperre und nach beendetem Helfer,
     Wiederherstellung nach beendetem Helfer und über `Guard::onShutdown`, enge ACL des Journal-Verzeichnisses. `--out` über eine
     vorhandene Datei einzeln geprüft (neue Datei mit enger ACL, keine Temp-Datei zurück).
   - `tests/windows-admin-test.ps1` auf Windows 11 in einer Administrator-PowerShell, mit einem eigens angelegten lokalen Konto ohne
     Administratorrechte (Profil und Datenverzeichnis im Besitz dieses Kontos, Junctions darin auf einen Ordner nur für Administratoren),
-    19 Fälle grün: `client --user` (eigene ACL und eigenes Skript gefunden, nichts hinter der Junction gelesen, `pgpass.conf` hinter
+    17 Fälle grün: `client --user` (eigene ACL und eigenes Skript gefunden, nichts hinter der Junction gelesen, `pgpass.conf` hinter
     der Junction als nicht geprüft gemeldet), `check` (`postmaster.pid`, ACL über das Handle), `apply`/`rollback` (`WindowsPin` sperrt
     Datenverzeichnis und neues `conf.d`, Zurückspielen, `overwrite`/`create` hinter der Junction abgewiesen, Admin-Ordner
     unversehrt), `--dir` eines fremden Kontos abgewiesen, Konto, `ProfileList`-Eintrag und Arbeitsordner wieder entfernt. Gelaufen
     ist der Skriptstand vor drei späteren Absicherungen des Skripts selbst (Abbruch bei schon vorhandenem Arbeitsordner, Konto oder
-    `ProfileList`-Eintrag; Konto deaktiviert angelegt); die Wiederholung mit dem Endstand steht aus.
+    `ProfileList`-Eintrag; Konto deaktiviert angelegt). Am 29.10.2026 mit dem Endstand von Skript und Programm wiederholt, 17 Fälle
+    grün; dazu `tests/windows-redirect.php` in der Administrator-PowerShell, dort auch der Fall mit symbolischem Link am Namen (abgewiesen).
   - Regelkatalog mit 86 Regeln: neu `tls.ciphers`, `hba.weak_options`, `auth.passwordless_or_expired`, `roles.replication_login`,
     `roles.createrole_self_grant`, `db.default_acl_public`, `db.rls_policies_inactive`, `code.fdw_secrets`, `code.event_triggers`,
     `log.lock_waits`, `data.crash_safety`, `os.ssl_cert_expiry`, `os.tablespace_permissions`, `client.psql_history`; erweitert

@@ -1985,7 +1985,7 @@ final class HtmlRenderer
         . ' · ' . ($log['finished_at'] !== null ? 'beendet ' . TextRenderer::when($log['finished_at']) : 'nicht beendet')],
       ['Journal', $log['dir']],
     ]);
-    return self::page('Das Protokoll', 'apply-Protokoll', $log['server'], TextRenderer::when($log['started_at']), $meta, $toc, $body, null);
+    return self::page('Das Protokoll', 'apply-Protokoll', $log['server'], TextRenderer::when($log['started_at']), $meta, $toc, $body, null, true);
   }
 
   /**
@@ -2018,7 +2018,7 @@ final class HtmlRenderer
       ['Lauf', 'begonnen ' . TextRenderer::when($log['started_at']) . ' · beendet ' . TextRenderer::when($log['finished_at'])],
       ['Journal', $log['dir']],
     ]);
-    return self::page('Das Protokoll', 'rollback-Protokoll', $log['server'], TextRenderer::when($log['started_at']), $meta, $toc, $body, null);
+    return self::page('Das Protokoll', 'rollback-Protokoll', $log['server'], TextRenderer::when($log['started_at']), $meta, $toc, $body, null, true);
   }
 
   /** The planned changes of apply as in the terminal, each SQL statement with its state from the journal. */
@@ -2109,7 +2109,7 @@ final class HtmlRenderer
    * contents, the sections, the notices. $toc lists [id, label, count|null, colour key|null] with fixed ids and keys; $meta and $body
    * are HTML whose values are already escaped.
    */
-  private static function page(string $document, string $kind, string $server, string $when, string $meta, array $toc, string $body, ?string $legal): string
+  private static function page(string $document, string $kind, string $server, string $when, string $meta, array $toc, string $body, ?string $legal, bool $runLog = false): string
   {
     $toc[] = ['notices', 'Hinweise', null, null];
     $nav = '';
@@ -2127,6 +2127,8 @@ final class HtmlRenderer
     $kindHtml = self::esc($kind);
     $serverHtml = self::esc($server);
     $documentHtml = self::esc($document);
+    // Fixed text. A run log carries no legal notice, so the deletion advice of LEGAL_NOTICE ("zeitnah löschen") is repeated here
+    $privacy = $runLog ? ' Rollennamen können personenbeziehbar sein; nach Abschluss zeitnah löschen.' : '';
     return <<<HTML
       <!doctype html>
       <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2139,7 +2141,7 @@ final class HtmlRenderer
       <p class="tool">{$tool}</p>
       <h1>{$kindHtml} <span class="host">{$serverHtml}</span></h1>
       <dl class="meta">{$meta}</dl>
-      <p class="confidential">{$documentHtml} enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen.</p>
+      <p class="confidential">{$documentHtml} enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen.{$privacy}</p>
       <nav class="toc" aria-label="Inhalt"><ol>{$nav}</ol></nav>
       </header>
       <main>

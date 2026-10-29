@@ -165,7 +165,8 @@ current run; otherwise it is reported as "not comparable".
   that group or others can write is refused; the identity of every target is settled before the first change. `postgresql.conf` is read once for
   the change; `apply` creates at most one directory level. A file of root in a directory of the service account is written in place if that
   account may write it, otherwise refused. Windows has no identity switch: there a helper (`WindowsPin`) holds the root and target directories
-  open without `FILE_SHARE_DELETE` (an empty one also without `FILE_SHARE_WRITE`) for the entire file phase of `apply` and `rollback` and checks on these handles, before
+  open without `FILE_SHARE_DELETE` (all but the data directory also without `FILE_SHARE_WRITE`) for the entire file phase of `apply` and `rollback`, holds the file being written
+  the same way from its check until the write is done, and checks on these handles, before
   and after every write, that each directory is still a plain directory under its final path (`GetFinalPathNameByHandleW`): no directory can be
   renamed away and replaced by a junction between check and write, and one changed in place stops the operation; without a running helper
   nothing is written; ACLs and `postmaster.pid`
@@ -327,7 +328,8 @@ against an instance with real data.
 
 ## Status
 
-0.4.0 (unreleased): **command line recut** — `-o NAME` writes JSON and HTML, `-f NAME` compares with an earlier report, placeholders
+0.4.0 (2026-10-29): **security fix** for Windows (as administrator, an account owning the data directory or the examined profile could
+redirect reads and writes through a junction; affected 0.3.0 to 0.3.2), **command line recut** — `-o NAME` writes JSON and HTML, `-f NAME` compares with an earlier report, placeholders
 as in `log_filename` for the date; `--format`, `--out`, `--previous` and the command `verify` are gone (`verify` is now `check -f`).
 Windows write side holds the server's directories against a swap for a junction via open directory handles without `FILE_SHARE_DELETE` (`WindowsPin`),
 handle-based ACL reading (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), restricted ACLs for journals and output files on Windows (checked when a journal is loaded), comparison

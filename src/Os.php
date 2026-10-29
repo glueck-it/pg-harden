@@ -572,6 +572,31 @@ final class Platform
         return h;
       }
 
+      /**
+       * Holds a file entry for the duration of one write: opened as the entry itself (FILE_FLAG_OPEN_REPARSE_POINT), refused if it is
+       * a directory or a reparse point (symbolic link), shared for reading and writing but not FILE_SHARE_DELETE, so it cannot be
+       * renamed, removed or replaced by a link until released — PHP still opens it for writing. With create the entry is made here
+       * (CREATE_NEW on the entry itself: a link already standing at the name makes it fail instead of being followed).
+       */
+      public static SafeFileHandle OpenFileHeld(string path, bool create) {
+        // 0x81 = FILE_READ_ATTRIBUTES | FILE_READ_DATA: a handle with attribute access only takes no part in the sharing check, so
+        // without FILE_READ_DATA the missing FILE_SHARE_DELETE would not stop a rename (measured). 0x03 = FILE_SHARE_READ |
+        // FILE_SHARE_WRITE, 1 = CREATE_NEW, 3 = OPEN_EXISTING, 0x00200000 = FILE_FLAG_OPEN_REPARSE_POINT
+        SafeFileHandle h = CreateFileW(path, 0x81u, 0x03u, IntPtr.Zero, create ? 1u : 3u, 0x00200000u, IntPtr.Zero);
+        if (h.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        BY_HANDLE_FILE_INFORMATION info;
+        if (!GetFileInformationByHandle(h, out info)) {
+          int err = Marshal.GetLastWin32Error();
+          h.Dispose();
+          throw new Win32Exception(err);
+        }
+        if ((info.FileAttributes & 0x10u) != 0 || (info.FileAttributes & 0x400u) != 0) {
+          h.Dispose();
+          throw new InvalidOperationException("Datei ist eine Umleitung (symbolischer Link) oder ein Verzeichnis.");
+        }
+        return h;
+      }
+
       /** Whether the object behind a held handle is (no longer) a plain directory: set in place, a junction shows up here. */
       public static bool Redirected(SafeFileHandle h) {
         BY_HANDLE_FILE_INFORMATION info;
@@ -765,11 +790,17 @@ final class WindowsPin
    * Verifies right before a write/create/mkdir/restore/backup on Windows that $path (or its parent directory when $path is
    * being created) is held by the active pin of begin(), that the helper still runs, that every held directory is still a plain
    * directory under its final path (checked on the handles, see verifyHeld) and that an existing target is not redirected through
-   * a junction or symbolic link. Without an active pin nothing is written (fail-closed).
+   * a junction or symbolic link. An existing target file is then held as well (helper 'holdfile', without FILE_SHARE_DELETE) until
+   * the returned callable releases it: between this check and the write nobody can rename it, remove it or swap in a symbolic link
+   * (which an account with the symbolic-link privilege or in developer mode could do in the data directory, held with
+   * FILE_SHARE_WRITE for the server). $hold = false only for removing the entry, which the own handle would block; deleting a link
+   * removes only the link. With $create an absent target is made by the helper as the entry itself and held the same way, so
+   * nobody can put a link at the name between this check and the write; the caller then writes into the existing, empty file.
+   * Without an active pin nothing is written (fail-closed).
    *
-   * @return callable(): void to call after the operation: checks the held directories once more
+   * @return callable(): void to call after the operation: releases the held file and checks the held directories once more
    */
-  public static function verifyTarget(string $path, bool $mustExist = false): callable
+  public static function verifyTarget(string $path, bool $mustExist = false, bool $hold = true, bool $create = false): callable
   {
     if (!Platform::windows()) {
       return static function (): void {};
@@ -802,14 +833,47 @@ final class WindowsPin
       throw new HardenException('Datei ' . Text::printable($path) . ' fehlt oder ist nicht prüfbar — nichts geändert.');
     }
     if ($present && $lit !== $basePlain) {
+      if ($create) {
+        throw new HardenException('Datei ' . Text::printable($path) . ' existiert bereits oder ist nicht prüfbar — nichts geändert.');
+      }
       $liveTarget = Fs::attempt(fn() => readlink($path));
       $wantTarget = $baseFinal . '\\' . basename($lit);
       if (!is_string($liveTarget) || self::plain($liveTarget) !== $wantTarget) {
         throw new HardenException(Text::printable($path) . ' führt über eine Umleitung (Junction/symbolischer Link) — nichts geändert.');
       }
+      if ($hold && Fs::attempt(fn() => is_dir($path)) !== true) {
+        return self::holdFile($path, $lit, $wantTarget, false);
+      }
+    } elseif ($create && $lit !== $basePlain) {
+      return self::holdFile($path, $lit, $baseFinal . '\\' . basename($lit), true);
     }
     // Afterwards the same check on the handles: a directory changed while the operation ran makes it fail, and the caller restores.
     return static fn() => self::verifyHeld();
+  }
+
+  /**
+   * Holds the target file through the helper (opened, or with $create made, as the entry itself) and checks its final path.
+   *
+   * @return callable(): void releases the file and checks the held directories once more; calling it twice is harmless
+   */
+  private static function holdFile(string $path, string $lit, string $wantTarget, bool $create): callable
+  {
+    try {
+      $final = self::command(['op' => 'holdfile', 'path' => $lit, 'create' => $create])['final'] ?? '';
+    } catch (HardenException $e) {
+      throw new HardenException(Text::printable($path) . ' lässt sich nicht ' . ($create ? 'anlegen und ' : '') . 'festhalten ('
+        . $e->getMessage() . ') — nichts geändert.');
+    }
+    if (self::plain((string) $final) !== $wantTarget) {
+      self::command(['op' => 'releasefile', 'path' => $lit]);
+      // A file made under a way that redirects is not removed by path; the message names it instead of leaving it unnoticed
+      throw new HardenException(Text::printable($path) . ' führt über eine Umleitung (Junction/symbolischer Link) — nichts geändert'
+        . ($create ? '; eine leere Datei blieb dort zurück: ' . Text::printable((string) $final) : '') . '.');
+    }
+    return static function () use ($lit): void {
+      self::command(['op' => 'releasefile', 'path' => $lit]);
+      self::verifyHeld();
+    };
   }
 
   /**
@@ -950,6 +1014,7 @@ final class WindowsPin
       $handles = @{}
       # The path as PHP sent it, per handle: 'check' answers with it, so PHP finds its own key again (strtolower there lowers ASCII only).
       $paths = @{}
+      $files = @{}
       try {
         while (($line = [Console]::In.ReadLine()) -ne $null) {
           $cmd = $null
@@ -984,6 +1049,22 @@ final class WindowsPin
                 $paths.Remove($k)
               }
               $res = @{ ok = $true }
+            } elseif ($cmd.op -eq 'holdfile') {
+              # One target file for the duration of one write (verifyTarget): kept apart from the directories, which 'check' reports.
+              $k = & $key ([string]$cmd.path)
+              if (-not $files.ContainsKey($k)) {
+                $files[$k] = [WinHandle]::OpenFileHeld([string]$cmd.path, [bool]$cmd.create)
+              } elseif ([bool]$cmd.create) {
+                throw 'Datei wird bereits gehalten und kann nicht neu angelegt werden.'
+              }
+              $res = @{ ok = $true; final = [WinHandle]::FinalPath($files[$k]) }
+            } elseif ($cmd.op -eq 'releasefile') {
+              $k = & $key ([string]$cmd.path)
+              if ($files.ContainsKey($k)) {
+                $files[$k].Dispose()
+                $files.Remove($k)
+              }
+              $res = @{ ok = $true }
             } else {
               $res = @{ ok = $false; error = 'Unbekannter Befehl' }
             }
@@ -998,6 +1079,7 @@ final class WindowsPin
         }
       } finally {
         foreach ($h in $handles.Values) { $h.Dispose() }
+        foreach ($h in $files.Values) { $h.Dispose() }
       }
       PS;
     $encoded = base64_encode(mb_convert_encoding($ps, 'UTF-16LE', 'UTF-8'));

@@ -187,6 +187,13 @@ $check('rollback: unvollständig mit Wiederholungshinweis', str_contains($pages[
   && str_contains($pages['rollback'] ?? '', 'rollback-attempt-1.json'));
 $check('rollback: abgeschlossen', str_contains($pages['rollback-ok'] ?? '', '<p class="banner k-pass"><strong>Rückweg abgeschlossen</strong>'));
 $check('Protokolle nennen sich Protokoll', str_contains($pages['rollback'] ?? '', 'Das Protokoll enthält Rollen-'));
+$deletion = 'Rollennamen können personenbeziehbar sein; nach Abschluss zeitnah löschen.';
+$check('Protokolle tragen den Löschhinweis (ohne Rechtstext)', str_contains($pages['rollback'] ?? '', $deletion) && str_contains($okLog, $deletion));
+$check('Bericht ohne Löschhinweis im Kopf (steht im Rechtstext)', !str_contains(HtmlRenderer::render($compared), $deletion));
+$noLegal = $compared;
+$noLegal['meta']['legal_notice'] = null;
+$check('Bericht ohne Rechtstext bekommt den Protokoll-Hinweis trotzdem nicht', !str_contains(HtmlRenderer::render($noLegal), $deletion)
+  && !str_contains(HtmlRenderer::render($noLegal), 'Bestimmungsgemäße Verwendung'));
 
 $html = HtmlRenderer::render($compared);
 $check('Vergleich: Vergleichsabschnitt', str_contains($html, 'id="comparison"') && str_contains($html, 'Behoben 1') && str_contains($html, 'Neu 0'));

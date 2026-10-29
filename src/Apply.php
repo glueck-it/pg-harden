@@ -562,11 +562,17 @@ final class ServerFiles
   /** New file next to an existing sibling: same mode and (as root) the same owner and group. */
   public static function create(string $path, string $content, string $sibling): void
   {
-    $release = WindowsPin::verifyTarget($path, mustExist: false);
+    // On Windows the helper makes the empty file as the entry itself and holds it (verifyTarget create); PHP writes into it
+    $release = WindowsPin::verifyTarget($path, mustExist: false, create: true);
     try {
-      Fs::asOwnerOf($path, function () use ($path, $content, $sibling): void {
-        $fh = Fs::attempt(fn() => fopen($path, 'x'));
+      Fs::asOwnerOf($path, function () use ($path, $content, $sibling, $release): void {
+        $fh = Fs::attempt(fn() => fopen($path, Platform::windows() ? 'r+' : 'x'));
         if (!is_resource($fh)) {
+          if (Platform::windows()) {
+            // The empty file the helper made must not stay behind unrecorded
+            $release();
+            Fs::attempt(fn() => unlink($path));
+          }
           throw new HardenException('Datei ' . Text::printable($path) . ' lässt sich nicht anlegen (Rechte oder Verzeichnis fehlt).');
         }
         // The caller forgets the journal entry for a failed create: the half-written file must not stay behind unrecorded —
@@ -578,6 +584,8 @@ final class ServerFiles
         }
         Fs::attempt(fn() => fclose($fh));
         if (!$ok) {
+          // The held handle would block the removal: released first (the finally below releases once more, which is harmless)
+          $release();
           Fs::attempt(fn() => unlink($path));
           throw new HardenException('Schreiben von ' . Text::printable($path) . ' fehlgeschlagen' . (isset($e) ? ': ' . $e->getMessage() : '') . '.');
         }
@@ -656,7 +664,8 @@ final class ServerFiles
           if (Fs::definitelyAbsent($f['path'])) {
             continue;
           }
-          $release = WindowsPin::verifyTarget($f['path'], mustExist: false);
+          // Not held: the own handle would block the removal, and removing a link removes only the link
+          $release = WindowsPin::verifyTarget($f['path'], mustExist: false, hold: false);
           try {
             if (Platform::windows() && Fs::attempt(fn() => is_dir($f['path'])) === true) {
               WindowsPin::unpinDirForRemove($f['path']);

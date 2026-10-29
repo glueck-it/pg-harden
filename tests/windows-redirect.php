@@ -210,6 +210,74 @@ try {
   $expect('Schreiben und Sichern im festgehaltenen Verzeichnis', 'ok',
     fn() => $backupName !== null && trim((string) file_get_contents("$dataDir\\conf.d\\90-pg-harden.conf")) === 'ssl = on'
       && trim((string) file_get_contents("$dataDir\\postgresql.conf")) === '# gehärtet' ? 'ok' : 'fehlgeschlagen');
+  // Between the check and the write the target file itself is held: in the data directory (FILE_SHARE_WRITE for the server) it could
+  // otherwise be renamed away and replaced by a symbolic link. Writing stays possible; after the release the entry is free again.
+  $expect('verifyTarget hält die Zieldatei bis zur Freigabe fest', 'gehalten, beschreibbar, danach frei', function () use ($dataDir): string {
+    $conf = "$dataDir\\postgresql.conf";
+    $release = WindowsPin::verifyTarget($conf, mustExist: true);
+    try {
+      $renamed = Fs::attempt(fn() => rename($conf, "$dataDir\\postgresql.conf.moved")) === true;
+      $deleted = Fs::attempt(fn() => unlink($conf)) === true;
+      $fh = Fs::attempt(fn() => fopen($conf, 'r+'));
+      $writable = is_resource($fh) && flock($fh, LOCK_EX) && flock($fh, LOCK_UN);
+      if (is_resource($fh)) {
+        fclose($fh);
+      }
+    } finally {
+      $release();
+    }
+    $free = Fs::attempt(fn() => rename($conf, "$dataDir\\postgresql.conf.moved")) === true
+      && Fs::attempt(fn() => rename("$dataDir\\postgresql.conf.moved", $conf)) === true;
+    return ($renamed || $deleted ? 'nicht gehalten' : 'gehalten') . ', ' . ($writable ? 'beschreibbar' : 'nicht beschreibbar') . ', '
+      . ($free ? 'danach frei' : 'danach gesperrt');
+  });
+  // A new file is made by the helper as the entry itself and held from there: no link can be put at the name before the write.
+  $expect('verifyTarget create legt die Datei an und hält sie', 'angelegt, gehalten, danach frei', function () use ($dataDir): string {
+    $new = "$dataDir\\neu.conf";
+    $release = WindowsPin::verifyTarget($new, create: true);
+    try {
+      $made = is_file($new) && filesize($new) === 0;
+      $renamed = Fs::attempt(fn() => rename($new, "$dataDir\\neu.moved")) === true;
+    } finally {
+      $release();
+    }
+    $free = Fs::attempt(fn() => unlink($new)) === true;
+    return ($made ? 'angelegt' : 'nicht angelegt') . ', ' . ($renamed ? 'nicht gehalten' : 'gehalten') . ', ' . ($free ? 'danach frei' : 'danach gesperrt');
+  });
+  // A symbolic link standing at the name (needs developer mode or SeCreateSymbolicLinkPrivilege, otherwise skipped): neither
+  // create nor overwrite may follow it; the file it points to stays untouched.
+  $link = "$dataDir\\verlinkt.conf";
+  $target = "$elsewhere\\ziel.conf";
+  file_put_contents($target, "unberührt\n");
+  $canLink = Fs::attempt(fn() => symlink($target, $link)) === true;
+  $expect('Symbolischer Link am Namen: create und overwrite weisen ab', $canLink ? 'abgewiesen' : 'übersprungen (kein Recht für symbolische Links)',
+    function () use ($dataDir, $link, $target, $canLink): string {
+    try {
+      if (!$canLink) {
+        return 'übersprungen (kein Recht für symbolische Links)';
+      }
+      $refused = 0;
+      foreach ([fn() => ServerFiles::create($link, "neu\n", "$dataDir\\postgresql.conf"), fn() => ServerFiles::overwrite($link, "neu\n")] as $op) {
+        try {
+          $op();
+        } catch (HardenException) {
+          $refused++;
+        }
+      }
+      return $refused === 2 && trim((string) file_get_contents($target)) === 'unberührt' ? 'abgewiesen' : "durchgelassen ($refused von 2 abgewiesen)";
+    } finally {
+      Fs::attempt(fn() => unlink($link));
+      Fs::attempt(fn() => unlink($target));
+    }
+  });
+  $expect('ServerFiles::create weist vorhandene Datei ab', 'abgewiesen', function () use ($dataDir): string {
+    try {
+      ServerFiles::create("$dataDir\\postgresql.conf", "fremd\n", "$dataDir\\postgresql.conf");
+      return 'durchgelassen';
+    } catch (HardenException) {
+      return trim((string) file_get_contents("$dataDir\\postgresql.conf")) === '# gehärtet' ? 'abgewiesen' : 'abgewiesen, aber Datei geändert';
+    }
+  });
 
   $problems = ServerFiles::restore([
     ['path' => "$dataDir\\postgresql.conf", 'action' => 'modified', 'backup' => $backupName],

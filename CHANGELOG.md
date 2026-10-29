@@ -1,7 +1,41 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-10-29)
 
+- **Security fix — update if you run pg-harden as administrator on Windows.** Affected: 0.3.0 to 0.3.2 on Windows. Windows has no
+  identity switch, and these versions checked the way to a file only once before the run (`realpath`) — not when reading or writing,
+  and PHP's `realpath` returns a junction to a volume path (`\\?\Volume{…}`) unresolved, as a path inside the directory (measured with
+  PHP 8.4.6 on Windows 11, build 26300). An account that owns or may write the server's data
+  directory (the service account, or a database superuser via `COPY … TO PROGRAM`) or the profile examined by `client --user` could
+  therefore put a junction on that way:
+  - `apply` and `rollback` then created, overwrote or removed files with administrator rights in the directory the junction pointed
+    to. The names are those of the run — the server's `config_file` and `hba_file`, and `90-pg-harden.conf` in the include directory
+    (`conf.d` or `include_dir`), which may be created or removed as well — but the content is largely the account's: its own
+    configuration files, lines kept from an existing `90-pg-harden.conf`, or a backup that `rollback` (or the restore after a failed
+    run) copies between two files of the same name — also from a file the account may not read into one it
+    can, or from its own file into another cluster's (for example a `pg_hba.conf` with `trust`).
+  - `client --user=<account>` read files below the profile through it with administrator rights; the report then showed findings from
+    a file the account may not read (places and kinds of finding; no passwords or other secrets are printed). `check` read ACLs of the
+    server's files (`log_directory`, `ssl_key_file`, `hba_file`, `ident_file`) by path and reported the ACL of the junction's target as
+    the server's.
+
+  The way it works now is described in the Windows entry below: reads check the final path before and after reading, writes hold every
+  directory on the way open against renaming, and the target file itself from the check until its write is done. Derived from the
+  code of 0.3.2, not reproduced against 0.3.2 separately; the junction cases of `tests/windows-admin-test.ps1` and
+  `tests/windows-redirect.php` cover 0.4.0. The same code paths exist since 0.3.0. Linux and other Unix systems are not affected by
+  this fix (see 0.3.1 and 0.3.2).
+- **Windows write side: the target file is held as well (found in the review of this release).** Between the check of the way and the
+  write, `apply` and `rollback` held only the directories; in the data directory, held with `FILE_SHARE_WRITE` for the server, an
+  account with the right to create symbolic links (developer mode or `SeCreateSymbolicLinkPrivilege`) could rename the target file
+  away and put a symbolic link in its place, or put one at the name of a file about to be created. `WindowsPin::verifyTarget` now
+  also opens an existing target file as the entry itself (`FILE_FLAG_OPEN_REPARSE_POINT`, refused if it is a link or a directory,
+  final path checked), and a new one is made there by the helper (`CREATE_NEW` on the entry itself, so a link at the name makes it
+  fail instead of being followed); either is held without `FILE_SHARE_DELETE` until the write is done, writing stays possible. The handle needs `FILE_READ_DATA`: one with attribute access
+  only takes no part in the sharing check, and the file could still be renamed (measured). Removing an entry (`rollback` of a created
+  file) is not held, since removing a link removes only the link. Test: `tests/windows-redirect.php` (65 cases; the one with a symbolic link at the name runs only where the account may create
+  one, such as an elevated PowerShell).
+- **Run logs (`apply.html`, `rollback.html`) carry a note on personal data in their header:** the confidentiality note adds "Rollennamen können
+  personenbeziehbar sein; nach Abschluss zeitnah löschen." The run logs carry no legal notice, which is where the report says this.
 - **Command line recut: `-o` writes the report, `-f` compares with an earlier one (breaking, no aliases).** One way to get a report out
   of `check` and `client` instead of `--format`, `--out` and a separate command: without `-o` the text report goes to the terminal as
   before; `-o NAME` (`--output`) writes `NAME.json` and `NAME.html` and the terminal names the files and the number of findings. A name
@@ -60,10 +94,11 @@
     phase, from before the first read of `postgresql.conf`. Each handle is verified not to be a reparse point
     (`GetFileInformationByHandle`) and its final path (`GetFinalPathNameByHandleW`) must match the expected path from the root down.
     While held this way, Windows refuses to rename or delete any pinned directory, so no directory on the way can be renamed away and
-    replaced by a junction between check and write. An empty directory (such as a new `conf.d`) is held without `FILE_SHARE_WRITE` as
-    well, because only an empty directory can be turned into a junction in place (by design; that conversion itself is not reproduced in
-    the tests, and a directory with content could be emptied first — the handle check below catches such a change); a directory with content keeps `FILE_SHARE_WRITE`, so the server can
-    still rename files in its data directory (`ALTER SYSTEM`, `current_logfiles`) during the file phase. Before and after each file
+    replaced by a junction between check and write. Every held directory except the data directory is held without `FILE_SHARE_WRITE`
+    as well, which also keeps it from being turned into a junction in place (by design; that conversion itself is not reproduced in the
+    tests). Only the data directory keeps `FILE_SHARE_WRITE`, because the server renames files there itself (`ALTER SYSTEM`,
+    `current_logfiles`) during the file phase; whether it is empty or not was a snapshot and is not the criterion — a change in place
+    is caught by the handle check below. Before and after each file
     operation `WindowsPin::verifyTarget` has the helper check on all held handles that every directory is still a plain directory under
     its final path, and checks the target entry; a change aborts the operation (and the run restores its backups). Newly created
     directories (`conf.d`) are added to the active hold without releasing parent handles; `restore` releases only the removed
@@ -86,7 +121,9 @@
   - **Remaining limits on Windows:** on the read side (`check`, `client --user`), content reads check the path before and after reading
     and verify `stat`/`fstat` identity rather than holding parent directories open without `FILE_SHARE_DELETE`. A hard link is no
     redirect by its path; Windows 11 lets a non-administrator create one only to a file the account may write. Whether a file exists, its
-    name and its size may still be taken through a redirect. Files outside the profile or data directory are not judged.
+    name and its size may still be taken through a redirect. Files outside the profile or data directory are not judged. On the write
+    side a hard link as target file is written as the file it is; the account could only have created it to a file it may write
+    itself.
   - **Strict ACLs for journals, plan directories and `-o` reports on Windows (`Files::lockDown`, `Journal::load`,
     `WindowsFacts::isStrictlyPrivate`):** `Files::prepareDir` and `App::output` (`-o`) restrict the directory or file to the
     executing account, `SYSTEM` and `Administrators` (`icacls`) — changed: also an existing empty directory given with `--dir` (on Linux
@@ -103,7 +140,7 @@
     (offline test for the rule catalog, framework mappings and `Verifier`) and `tests/windows-admin-test.ps1` (for an elevated PowerShell:
     creates a temporary local non-administrator account, tests `client --user`, `check` and `apply`/`rollback` directory pinning against
     junctions in its profile and data directory, and removes the account and its `ProfileList` entry afterwards; the account never
-    logs on, so Windows creates no profile of its own; ran on Windows 11 on 2026-10-28, 19 of 19 cases green).
+    logs on, so Windows creates no profile of its own; ran on Windows 11 on 2026-10-28 and, with the release state, again on 2026-10-29, 17 of 17 cases green).
 - **Expanded hardening catalog (86 rules), OS/client probes, BSI IT-Grundschutz APP.4.3 and CIS PostgreSQL Benchmark mappings:**
   - **PostgreSQL server rules (`rules/postgresql.json`):** added `tls.ciphers`, `hba.weak_options` (`ident` over TCP and
     `clientcert=verify-ca`), `auth.passwordless_or_expired`, `roles.replication_login`, `roles.createrole_self_grant` (PostgreSQL 16+),
