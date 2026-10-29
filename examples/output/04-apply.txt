@@ -1,4 +1,4 @@
-pg-harden 0.4.0 · apply · Ausführung · 29.10.2026 13:50 (+00:00)
+pg-harden 0.4.1 · apply · Ausführung · 29.10.2026 22:02 (+00:00)
 Server        127.0.0.1:5432 · PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) · Benutzer postgres
 
 GEPLANTE ÄNDERUNGEN
@@ -25,7 +25,7 @@ ERGEBNIS
        nicht Anwendungen und andere Rollen)
   [OK] SQL: 2 Anweisung(en) in Datenbank shop
 
-VERGLEICH MIT DEM BERICHT VOM 29.10.2026 13:50 (+00:00)
+VERGLEICH MIT DEM BERICHT VOM 29.10.2026 22:02 (+00:00)
   Behoben 4 · Neu 0 · Weiter offen 36 · Nicht vergleichbar (diesmal nicht erneut geprüft) 0
 
   Behoben (4)

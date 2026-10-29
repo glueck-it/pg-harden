@@ -1,5 +1,5 @@
-pg-harden 0.4.0 · Client-Prüfung · 29.10.2026 13:50 (+00:00)
-Rechner       c782e1ca80d7 · Konto root
+pg-harden 0.4.1 · Client-Prüfung · 29.10.2026 22:03 (+00:00)
+Rechner       c57579768391 · Konto root
 Katalog       client 2026.10, postgresql 2026.10, system 2026.10 · Hinweise zu Verwendung und Gewähr am Ende
 
 ZUSAMMENFASSUNG

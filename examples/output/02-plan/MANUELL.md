@@ -1,6 +1,6 @@
 # Manuelle Maßnahmen
 
-Erzeugt von pg-harden 0.4.0 am 29.10.2026 13:50.
+Erzeugt von pg-harden 0.4.1 am 29.10.2026 22:02.
 
 Automatisch erzeugter Vorschlag. Auswirkungen auf Anwendungen vor dem Ausführen in einer Testumgebung prüfen. Der Plan enthält Rollen-, Objekt- und Netznamen: vertraulich ablegen.
 
@@ -23,7 +23,7 @@ Ohne TLS gehen Abfragen, Ergebnisse und bei schwachen Verfahren auch Anmeldedate
 
 Eine host-Zeile erlaubt auch unverschlüsselte Verbindungen. Ob TLS genutzt wird, entscheidet dann der Client.
 
-**Maßnahme:** host durch hostssl ersetzen; als letzte Zeile 'hostnossl all all all reject' ergänzen.
+**Maßnahme:** host durch hostssl ersetzen; als letzte Zeile 'hostnossl all all all reject' ergänzen. Eine Zeile, die eine vorangehende 'hostnossl … reject'- oder 'host … reject'-Zeile für Datenbank, Benutzer und Adresse vollständig abdeckt, meldet die Regel nicht.
 
 Mit `apply` ausführbar (Rückweg und Schutz vor dem Aussperren inklusive): `--include-confirm=hba.host_without_tls`.
 

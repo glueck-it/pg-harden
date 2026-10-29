@@ -2,7 +2,7 @@
 
 **English** · [Deutsch](#beispiele--echte-ausgaben-von-pg-harden)
 
-Everything in [`output/`](output/) was produced by pg-harden 0.4.0 against a throw-away PostgreSQL 18 container with a deliberately weak,
+Everything in [`output/`](output/) was produced by pg-harden 0.4.1 against a throw-away PostgreSQL 18 container with a deliberately weak,
 "grown" configuration ([`sample-init.sql`](sample-init.sql): an md5 password left over from an old version, an application role with an obvious
 password, `PUBLIC` allowed to create objects in `public`, a `SECURITY DEFINER` function without a fixed `search_path`, `trust` in `pg_hba.conf`).
 Nothing was edited by hand. [`generate.sh`](generate.sh) recreates all files (Docker required). The tool's output is in German.
@@ -37,7 +37,7 @@ The passwords in `sample-init.sql` are weak or public — never use them anywher
 
 [English](#examples--real-output-of-pg-harden) · **Deutsch**
 
-Alle Dateien in [`output/`](output/) hat pg-harden 0.4.0 gegen einen Wegwerf-Container mit PostgreSQL 18 erzeugt, dessen Konfiguration absichtlich
+Alle Dateien in [`output/`](output/) hat pg-harden 0.4.1 gegen einen Wegwerf-Container mit PostgreSQL 18 erzeugt, dessen Konfiguration absichtlich
 schwach und „gewachsen“ ist ([`sample-init.sql`](sample-init.sql): ein md5-Passwort aus einer alten Version, eine Anwendungsrolle mit naheliegendem
 Passwort, `PUBLIC` darf in `public` anlegen, eine `SECURITY DEFINER`-Funktion ohne festen `search_path`, `trust` in `pg_hba.conf`). Nichts ist von
 Hand bearbeitet. [`generate.sh`](generate.sh) erzeugt alle Dateien neu (Docker nötig).

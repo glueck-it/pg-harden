@@ -1,4 +1,4 @@
--- pg-harden 0.4.0 — für Datenbank template1, erzeugt 2026-10-29 13:50
+-- pg-harden 0.4.1 — für Datenbank template1, erzeugt 2026-10-29 22:02
 -- Automatisch erzeugter Vorschlag. Auswirkungen auf Anwendungen vor dem Ausführen in einer Testumgebung prüfen.
 -- Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.
 -- Ausführen: Verbindung zur Zieldatenbank selbst herstellen, dann mit -v ON_ERROR_STOP=1 -f harden_template1.sql einspielen.

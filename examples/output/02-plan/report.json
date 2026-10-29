@@ -1,8 +1,8 @@
 {
     "meta": {
-        "tool": "pg-harden 0.4.0",
+        "tool": "pg-harden 0.4.1",
         "mode": "server",
-        "created_at": "2026-10-29T13:50:12+00:00",
+        "created_at": "2026-10-29T22:02:57+00:00",
         "host": "127.0.0.1",
         "server": "127.0.0.1:5432",
         "ssl": false,
@@ -181,7 +181,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 130,
-                    "hba_type": "host"
+                    "hba_type": "host",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"all\"] [\"all\"] all"
                 }
             ],
             "checked_databases": []
@@ -291,7 +293,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 117,
-                    "hba_type": "local"
+                    "hba_type": "local",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:local [\"all\"] [\"all\"] "
                 },
                 {
                     "database": null,
@@ -300,7 +304,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 119,
-                    "hba_type": "host"
+                    "hba_type": "host",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"all\"] [\"all\"] 127.0.0.1/255.255.255.255"
                 },
                 {
                     "database": null,
@@ -309,7 +315,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 121,
-                    "hba_type": "host"
+                    "hba_type": "host",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"all\"] [\"all\"] ::1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
                 },
                 {
                     "database": null,
@@ -318,7 +326,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 124,
-                    "hba_type": "local"
+                    "hba_type": "local",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:local [\"replication\"] [\"all\"] "
                 },
                 {
                     "database": null,
@@ -327,7 +337,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 125,
-                    "hba_type": "host"
+                    "hba_type": "host",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"replication\"] [\"all\"] 127.0.0.1/255.255.255.255"
                 },
                 {
                     "database": null,
@@ -336,7 +348,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 126,
-                    "hba_type": "host"
+                    "hba_type": "host",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"replication\"] [\"all\"] ::1/ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
                 },
                 {
                     "database": null,
@@ -345,7 +359,9 @@
                     "fix_sql": null,
                     "rollback_sql": null,
                     "hba_line": 130,
-                    "hba_type": "host"
+                    "hba_type": "host",
+                    "hba_file": "/var/lib/postgresql/18/docker/pg_hba.conf",
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"all\"] [\"all\"] all"
                 }
             ],
             "checked_databases": []
@@ -398,7 +414,8 @@
                     "object": "Zeile 130",
                     "detail": "host all all all trust",
                     "fix_sql": null,
-                    "rollback_sql": null
+                    "rollback_sql": null,
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"all\"] [\"all\"] all"
                 }
             ],
             "checked_databases": []
@@ -421,7 +438,8 @@
                     "object": "Zeile 130",
                     "detail": "host all all — Superuser postgres",
                     "fix_sql": null,
-                    "rollback_sql": null
+                    "rollback_sql": null,
+                    "hba_key": "/var/lib/postgresql/18/docker/pg_hba.conf:host [\"all\"] [\"all\"] all"
                 }
             ],
             "checked_databases": []
@@ -1507,7 +1525,7 @@
             "incomplete": false,
             "value": "",
             "notes": [
-                "Datenverzeichnis: 84 % frei (850.3 GiB)"
+                "Datenverzeichnis: 84 % frei (845.7 GiB)"
             ],
             "findings": [],
             "checked_databases": []
