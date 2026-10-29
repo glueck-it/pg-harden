@@ -46,7 +46,10 @@ Container-Konfiguration“, nicht „die Regel erkennt Fehler zuverlässig“.
   Besitz von `postgres`, Container ohne systemd). Am 26.10.2026 liefen `check`, `apply`, `rollback` und ein wiederholter `rollback` nach
   einem nachgestellten Abbruch mit Programmstand 0.3.1 auf Windows 11 (PostgreSQL 18.6, Wegwerf-Cluster mit `initdb`), am selben Tag
   `check` mit Programmstand 0.3.2 dort normal und mit einer gefälschten Prozessnummer in `postmaster.pid` (als nicht nachgewiesen
-  gemeldet, der fremde Prozess nicht gelesen).
+  gemeldet, der fremde Prozess nicht gelesen). Am 29.10.2026 mit dem veröffentlichten Programmstand 0.4.0 dort erneut (PostgreSQL 18.6,
+  Wegwerf-Cluster, ohne Administratorrechte): `check -o`, `apply --execute` (`postgresql.conf` geändert, `conf.d` mit
+  `90-pg-harden.conf` angelegt, Protokoll `apply.html`), `check -f` gegen den Ausgangsbericht, `rollback` (drei Dateien
+  zurückgespielt, `conf.d` entfernt, neue Anmeldung geprüft), danach `check -f` ohne behobene oder neue Befunde.
 - **Programmstand 0.4.0, 28. und 29.10.2026:**
   - `tests/windows-redirect.php` auf Windows 11 (Wegwerf-Ordner unter `%TEMP%`, ohne Administratorrechte), 65 Fälle grün (der Fall mit symbolischem Link am Namen ohne Symlink-Recht übersprungen):
     Wegprüfung für `client --user` und `check` (auch `postmaster.pid` im Datenverzeichnis), ACL über das offene Handle
