@@ -1,8 +1,8 @@
 {
     "meta": {
-        "tool": "pg-harden 0.3.2",
+        "tool": "pg-harden 0.4.0",
         "mode": "server",
-        "created_at": "2026-10-26T16:10:49+00:00",
+        "created_at": "2026-10-29T13:50:12+00:00",
         "host": "127.0.0.1",
         "server": "127.0.0.1:5432",
         "ssl": false,
@@ -21,9 +21,9 @@
         "refused_databases": [],
         "catalog": "client 2026.10, postgresql 2026.10, system 2026.10",
         "counts": {
-            "pass": 31,
-            "fail": 28,
-            "info": 2,
+            "pass": 42,
+            "fail": 29,
+            "info": 3,
             "skip": 0,
             "error": 0,
             "incomplete": 2
@@ -132,6 +132,21 @@
             "checked_databases": []
         },
         {
+            "id": "tls.ciphers",
+            "title": "Keine schwachen TLS-Chiffren und Server-Präferenz aktiv",
+            "category": "Netzwerk und TLS",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
             "id": "hba.errors",
             "title": "pg_hba.conf enthält keine fehlerhaften Zeilen",
             "category": "Netzwerk und TLS",
@@ -207,6 +222,21 @@
                     "rollback_sql": null
                 }
             ],
+            "checked_databases": []
+        },
+        {
+            "id": "auth.passwordless_or_expired",
+            "title": "Anmeldefähige Rollen haben ein gültiges Passwort hinterlegt",
+            "category": "Authentifizierung",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
             "checked_databases": []
         },
         {
@@ -397,6 +427,21 @@
             "checked_databases": []
         },
         {
+            "id": "hba.weak_options",
+            "title": "Keine ident-Anmeldung über das Netz und kein clientcert=verify-ca ohne Namensabgleich",
+            "category": "Authentifizierung",
+            "severity": "medium",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
             "id": "auth.authentication_timeout",
             "title": "Anmeldevorgang ist zeitlich begrenzt (höchstens 60 Sekunden)",
             "category": "Authentifizierung",
@@ -474,10 +519,25 @@
         },
         {
             "id": "roles.server_file_access",
-            "title": "Kein Nicht-Superuser hat Zugriff auf Serverdateien oder -programme",
+            "title": "Kein Nicht-Superuser hat Zugriff auf Serverdateien, -programme oder alle Tabellen",
             "category": "Rollen und Rechte",
             "severity": "high",
             "goal": "Integrität",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "roles.replication_login",
+            "title": "REPLICATION-Recht nur für dedizierte Replikations- und Sicherungsrollen",
+            "category": "Rollen und Rechte",
+            "severity": "low",
+            "goal": "Vertraulichkeit",
             "automation": "manual",
             "scope": "cluster",
             "status": "pass",
@@ -517,6 +577,21 @@
             "severity": "low",
             "goal": "Integrität",
             "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "roles.createrole_self_grant",
+            "title": "CREATEROLE-Rollen vergeben sich neue Rollen nicht automatisch mit INHERIT/SET",
+            "category": "Rollen und Rechte",
+            "severity": "low",
+            "goal": "Integrität",
+            "automation": "confirm",
             "scope": "cluster",
             "status": "pass",
             "incomplete": false,
@@ -681,6 +756,44 @@
             ]
         },
         {
+            "id": "db.default_acl_public",
+            "title": "Keine CREATE-Rechte auf Fachschemata und keine Standardrechte (ALTER DEFAULT PRIVILEGES) für PUBLIC",
+            "category": "Rollen und Rechte",
+            "severity": "medium",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "database",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "db.rls_policies_inactive",
+            "title": "Tabellen mit Row-Level-Security-Policies haben RLS eingeschaltet",
+            "category": "Rollen und Rechte",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "database",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
             "id": "code.secdef_search_path",
             "title": "SECURITY DEFINER-Funktionen haben einen festen search_path",
             "category": "Code in der Datenbank",
@@ -774,6 +887,44 @@
             "notes": [],
             "findings": [],
             "checked_databases": []
+        },
+        {
+            "id": "code.fdw_secrets",
+            "title": "Keine USER MAPPING FOR PUBLIC und keine Klartext-Passwörter in Foreign-Data-Wrappern oder Subscriptions",
+            "category": "Code in der Datenbank",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "database",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
+        },
+        {
+            "id": "code.event_triggers",
+            "title": "Installierte Event-Trigger (Bestandsliste)",
+            "category": "Code in der Datenbank",
+            "severity": "info",
+            "goal": "Integrität",
+            "automation": "manual",
+            "scope": "database",
+            "status": "info",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": [
+                "postgres",
+                "shop",
+                "template1"
+            ]
         },
         {
             "id": "log.collector",
@@ -892,7 +1043,7 @@
         },
         {
             "id": "log.pgaudit",
-            "title": "pgAudit ist geladen",
+            "title": "pgAudit ist geladen und eingerichtet",
             "category": "Protokollierung",
             "severity": "medium",
             "goal": "Integrität",
@@ -907,6 +1058,29 @@
                     "database": null,
                     "object": "shared_preload_libraries",
                     "detail": "pgaudit nicht geladen",
+                    "fix_sql": null,
+                    "rollback_sql": null
+                }
+            ],
+            "checked_databases": []
+        },
+        {
+            "id": "log.lock_waits",
+            "title": "Lange Sperrwartezeiten werden protokolliert",
+            "category": "Protokollierung",
+            "severity": "low",
+            "goal": "Verfügbarkeit",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "fail",
+            "incomplete": false,
+            "value": "log_lock_waits = off",
+            "notes": [],
+            "findings": [
+                {
+                    "database": null,
+                    "object": "log_lock_waits",
+                    "detail": "ist 'off', erwartet 'on'",
                     "fix_sql": null,
                     "rollback_sql": null
                 }
@@ -1119,6 +1293,21 @@
             "checked_databases": []
         },
         {
+            "id": "data.crash_safety",
+            "title": "Absturzsicherheit und Prüfsummentreue sind nicht abgeschaltet (fsync, full_page_writes)",
+            "category": "Datenschutz und Integrität",
+            "severity": "high",
+            "goal": "Integrität",
+            "automation": "confirm",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
             "id": "os.pgdata_permissions",
             "title": "Datenverzeichnis ist nur für das Dienstkonto zugänglich",
             "category": "Betriebssystem",
@@ -1161,6 +1350,40 @@
             "value": "",
             "notes": [
                 "TLS ist nicht eingeschaltet — nichts zu prüfen"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.ssl_cert_expiry",
+            "title": "Server- und CA-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab",
+            "category": "Betriebssystem",
+            "severity": "medium",
+            "goal": "Verfügbarkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "TLS ist nicht eingeschaltet — nichts zu prüfen"
+            ],
+            "findings": [],
+            "checked_databases": []
+        },
+        {
+            "id": "os.tablespace_permissions",
+            "title": "Verzeichnisse benutzerdefinierter Tablespaces sind nur für das Dienstkonto zugänglich",
+            "category": "Betriebssystem",
+            "severity": "high",
+            "goal": "Vertraulichkeit",
+            "automation": "manual",
+            "scope": "cluster",
+            "status": "pass",
+            "incomplete": false,
+            "value": "",
+            "notes": [
+                "Keine benutzerdefinierten Tablespaces angelegt"
             ],
             "findings": [],
             "checked_databases": []
@@ -1239,7 +1462,7 @@
         },
         {
             "id": "os.service_unit",
-            "title": "Dienstdatei und Prozessumgebung enthalten keine Klartext-Geheimnisse",
+            "title": "Dienstkonfiguration und Prozessumgebung sind geschützt und enthalten keine Klartext-Geheimnisse",
             "category": "Betriebssystem",
             "severity": "medium",
             "goal": "Vertraulichkeit",
@@ -1284,7 +1507,7 @@
             "incomplete": false,
             "value": "",
             "notes": [
-                "Datenverzeichnis: 85 % frei (854.1 GiB)"
+                "Datenverzeichnis: 84 % frei (850.3 GiB)"
             ],
             "findings": [],
             "checked_databases": []
@@ -1309,10 +1532,532 @@
     ],
     "mappings": {
         "bsi-app43": {
-            "framework": "BSI IT-Grundschutz, Baustein APP.4.3 Relationale Datenbanken (Kompendium 2023)",
+            "framework": "BSI IT-Grundschutz-Kompendium (Edition 2023), Baustein APP.4.3 Relationale Datenbanken",
+            "verified": true,
+            "note": "Kennungen, Titel und entfallene Anforderungen geprüft gegen das Original-PDF des BSI (Edition 2023); die Zuordnung der Regeln ist eine eigene Einschätzung. Nur Kennungen und die Anforderungstitel, teils gekürzt, kein weiterer Originaltext. Die Anforderungen A2, A5, A6, A7, A8, A10, A14 und A15 sind in der Edition 2023 entfallen (Querschnittsthemen verweisen laut Abschnitt 1.3 auf OPR.4, OPS.1.1.3, OPS.1.1.5, CON.3 und OPS.1.2.2; Klartext-Passwortverbot und Checklisten-Härtung liegen in A3, Protokollprüfung in A18/A20).",
+            "controls": [
+                {
+                    "control": "APP.4.3.A1",
+                    "title": "Sicherheitsrichtlinie für Datenbanksysteme (B)",
+                    "state": "Befund",
+                    "rules_clean": "7 von 12",
+                    "rules": [
+                        "roles.extra_superusers",
+                        "roles.server_file_access",
+                        "roles.replication_login",
+                        "roles.bypassrls",
+                        "roles.createrole",
+                        "roles.createrole_self_grant",
+                        "db.public_schema_create",
+                        "db.public_temp",
+                        "db.public_connect",
+                        "db.catalog_visibility",
+                        "db.default_acl_public",
+                        "db.rls_policies_inactive"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A3",
+                    "title": "Basishärtung des DBMS und kein Klartext für Passwörter (B)",
+                    "state": "Befund",
+                    "rules_clean": "16 von 28",
+                    "rules": [
+                        "net.listen_addresses",
+                        "hba.trust",
+                        "hba.cleartext_password",
+                        "hba.md5_method",
+                        "hba.open_to_all",
+                        "hba.superuser_remote",
+                        "hba.weak_options",
+                        "auth.password_encryption",
+                        "auth.md5_passwords",
+                        "auth.passwordless_or_expired",
+                        "auth.weak_passwords",
+                        "auth.authentication_timeout",
+                        "auth.auth_delay",
+                        "auth.password_policy",
+                        "patch.supported_major",
+                        "patch.catalog_current",
+                        "code.untrusted_languages",
+                        "code.lo_compat_privileges",
+                        "code.extensions",
+                        "code.preload_libraries",
+                        "os.pgdata_permissions",
+                        "os.tablespace_permissions",
+                        "os.config_permissions",
+                        "os.socket_permissions",
+                        "os.umask",
+                        "os.service_account",
+                        "os.service_unit",
+                        "os.package_source"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A4",
+                    "title": "Geregeltes Anlegen neuer Datenbanken (B)",
+                    "state": "Befund",
+                    "rules_clean": "1 von 5",
+                    "rules": [
+                        "db.public_schema_create",
+                        "db.public_temp",
+                        "db.public_connect",
+                        "db.catalog_visibility",
+                        "db.default_acl_public"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A9",
+                    "title": "Datensicherung eines Datenbanksystems (B)",
+                    "state": "Befund",
+                    "rules_clean": "2 von 4",
+                    "rules": [
+                        "avail.archive_enabled",
+                        "avail.archiver_failing",
+                        "data.checksums",
+                        "data.crash_safety"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A11",
+                    "title": "Ausreichende Dimensionierung der Hardware (S)",
+                    "state": "Befund",
+                    "rules_clean": "5 von 7",
+                    "rules": [
+                        "avail.temp_file_limit",
+                        "avail.slot_wal_keep",
+                        "avail.inactive_slots",
+                        "sess.idle_in_transaction",
+                        "log.directory_outside_pgdata",
+                        "os.log_own_volume",
+                        "os.disk_free"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A12",
+                    "title": "Einheitlicher Konfigurationsstandard von DBMS (S)",
+                    "state": "Befund",
+                    "rules_clean": "4 von 5",
+                    "rules": [
+                        "conf.role_db_overrides",
+                        "roles.allow_alter_system",
+                        "hba.errors",
+                        "data.crash_safety",
+                        "os.config_permissions"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A13",
+                    "title": "Restriktive Handhabung von Datenbank-Links (S)",
+                    "state": "Sichtung nötig",
+                    "rules_clean": "1 von 2",
+                    "rules": [
+                        "code.fdw_secrets",
+                        "code.extensions"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A16",
+                    "title": "Verschlüsselung der Datenbankanbindung (S)",
+                    "state": "Befund",
+                    "rules_clean": "4 von 6",
+                    "rules": [
+                        "tls.ssl_enabled",
+                        "tls.min_protocol",
+                        "tls.ciphers",
+                        "hba.host_without_tls",
+                        "os.ssl_key_permissions",
+                        "os.ssl_cert_expiry"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A17",
+                    "title": "Datenübernahme oder Migration (S)",
+                    "state": "Befund",
+                    "rules_clean": "1 von 2",
+                    "rules": [
+                        "data.checksums",
+                        "data.crash_safety"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A18",
+                    "title": "Überwachung des Datenbankmanagementsystems (S)",
+                    "state": "Befund",
+                    "rules_clean": "4 von 6",
+                    "rules": [
+                        "avail.archiver_failing",
+                        "avail.inactive_slots",
+                        "log.collector",
+                        "log.lock_waits",
+                        "os.disk_free",
+                        "os.ssl_cert_expiry"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A19",
+                    "title": "Schutz vor schädlichen Datenbank-Skripten (S)",
+                    "state": "Befund",
+                    "rules_clean": "2 von 5",
+                    "rules": [
+                        "code.secdef_search_path",
+                        "code.untrusted_languages",
+                        "code.event_triggers",
+                        "db.public_schema_create",
+                        "db.default_acl_public"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A20",
+                    "title": "Regelmäßige Audits und Protokollauswertung (S)",
+                    "state": "Befund",
+                    "rules_clean": "6 von 17",
+                    "rules": [
+                        "code.extensions",
+                        "code.preload_libraries",
+                        "code.event_triggers",
+                        "conf.role_db_overrides",
+                        "log.collector",
+                        "log.connections",
+                        "log.disconnections",
+                        "log.line_prefix",
+                        "log.statement_ddl",
+                        "log.pgaudit",
+                        "log.lock_waits",
+                        "log.parameter_length",
+                        "log.debug_print",
+                        "log.file_mode",
+                        "log.directory_outside_pgdata",
+                        "os.log_permissions",
+                        "os.log_own_volume"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A21",
+                    "title": "Einsatz von Datenbank-Sicherheitswerkzeugen (H)",
+                    "state": "Befund",
+                    "rules_clean": "0 von 3",
+                    "rules": [
+                        "auth.auth_delay",
+                        "auth.password_policy",
+                        "log.pgaudit"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A22",
+                    "title": "Notfallvorsorge (H)",
+                    "state": "Befund",
+                    "rules_clean": "2 von 4",
+                    "rules": [
+                        "avail.archive_enabled",
+                        "avail.archiver_failing",
+                        "data.checksums",
+                        "data.crash_safety"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A23",
+                    "title": "Archivierung (H)",
+                    "state": "Befund",
+                    "rules_clean": "1 von 3",
+                    "rules": [
+                        "avail.archive_enabled",
+                        "avail.archiver_failing",
+                        "data.checksums"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A24",
+                    "title": "Datenverschlüsselung in der Datenbank (H)",
+                    "state": "Sichtung nötig",
+                    "rules_clean": "2 von 3",
+                    "rules": [
+                        "code.extensions",
+                        "os.pgdata_permissions",
+                        "os.tablespace_permissions"
+                    ]
+                },
+                {
+                    "control": "APP.4.3.A25",
+                    "title": "Sicherheitsprüfungen von Datenbanksystemen (H)",
+                    "state": "nicht vollständig geprüft",
+                    "rules_clean": "4 von 6",
+                    "rules": [
+                        "patch.supported_major",
+                        "patch.catalog_current",
+                        "os.package_source",
+                        "conf.role_db_overrides",
+                        "hba.errors",
+                        "os.service_unit"
+                    ]
+                }
+            ]
+        },
+        "cis-postgresql": {
+            "framework": "CIS PostgreSQL Benchmark (eigene Gliederung in Anlehnung an die Abschnitte 1–7)",
             "verified": false,
-            "note": "Platzhalter: Anforderungsnummern erst nach Abgleich mit dem BSI-Original eintragen, nicht aus dem Gedächtnis. Grundschutz++ (OSCAL) prüfen.",
-            "controls": []
+            "note": "Eigene Gliederung mit eigenen deutschen Kurztiteln in Anlehnung an die Abschnitte 1–7 des Benchmarks: die Nummern sind keine CIS-Kennungen, kein Originaltext. Zuordnung vor Verwendung gegen die eingesetzte Benchmark-Fassung prüfen. CIS Benchmarks ist eine Marke des Center for Internet Security; keine Verbindung, Empfehlung oder Zertifizierung durch CIS.",
+            "controls": [
+                {
+                    "control": "1.1",
+                    "title": "Bezug aus vertrauenswürdiger Paketquelle",
+                    "state": "nicht vollständig geprüft",
+                    "rules_clean": "0 von 1",
+                    "rules": [
+                        "os.package_source"
+                    ]
+                },
+                {
+                    "control": "1.2",
+                    "title": "Dedizierter Systemdienst und Dienstkonto",
+                    "state": "nicht vollständig geprüft",
+                    "rules_clean": "1 von 2",
+                    "rules": [
+                        "os.service_account",
+                        "os.service_unit"
+                    ]
+                },
+                {
+                    "control": "1.3",
+                    "title": "Datencluster mit Datenprüfsummen initialisiert",
+                    "state": "Befund",
+                    "rules_clean": "0 von 1",
+                    "rules": [
+                        "data.checksums"
+                    ]
+                },
+                {
+                    "control": "1.4",
+                    "title": "Unterstützte Haupt- und Nebenversion im Einsatz",
+                    "state": "ohne Befund",
+                    "rules_clean": "2 von 2",
+                    "rules": [
+                        "patch.supported_major",
+                        "patch.catalog_current"
+                    ]
+                },
+                {
+                    "control": "2.1",
+                    "title": "Dateierstellungsmaske (umask) und Verzeichnisrechte des Dienstes",
+                    "state": "ohne Befund",
+                    "rules_clean": "4 von 4",
+                    "rules": [
+                        "os.umask",
+                        "os.pgdata_permissions",
+                        "os.tablespace_permissions",
+                        "os.config_permissions"
+                    ]
+                },
+                {
+                    "control": "2.2",
+                    "title": "Zugriffsrechte auf Unix-Domain-Sockets",
+                    "state": "Befund",
+                    "rules_clean": "0 von 1",
+                    "rules": [
+                        "os.socket_permissions"
+                    ]
+                },
+                {
+                    "control": "3.1",
+                    "title": "Protokollsammler, Zielverzeichnis und Dateimodus",
+                    "state": "Befund",
+                    "rules_clean": "4 von 5",
+                    "rules": [
+                        "log.collector",
+                        "log.directory_outside_pgdata",
+                        "log.file_mode",
+                        "os.log_permissions",
+                        "os.log_own_volume"
+                    ]
+                },
+                {
+                    "control": "3.2",
+                    "title": "Protokollierung von Verbindungen, Trennungen und Sitzungspräfix",
+                    "state": "Befund",
+                    "rules_clean": "0 von 3",
+                    "rules": [
+                        "log.connections",
+                        "log.disconnections",
+                        "log.line_prefix"
+                    ]
+                },
+                {
+                    "control": "3.3",
+                    "title": "Protokollierung von Schemaänderungen, Sperr-Wartezeiten und Parametern",
+                    "state": "Befund",
+                    "rules_clean": "0 von 3",
+                    "rules": [
+                        "log.statement_ddl",
+                        "log.lock_waits",
+                        "log.parameter_length"
+                    ]
+                },
+                {
+                    "control": "3.4",
+                    "title": "Keine Debug-Ausgaben von internen Strukturen im Serverprotokoll",
+                    "state": "ohne Befund",
+                    "rules_clean": "1 von 1",
+                    "rules": [
+                        "log.debug_print"
+                    ]
+                },
+                {
+                    "control": "3.5",
+                    "title": "Erweiterte Audit-Protokollierung (pgaudit)",
+                    "state": "Befund",
+                    "rules_clean": "0 von 1",
+                    "rules": [
+                        "log.pgaudit"
+                    ]
+                },
+                {
+                    "control": "4.1",
+                    "title": "Begrenzung von Superuser-, System- und Rollenverwaltungsrechten",
+                    "state": "Befund",
+                    "rules_clean": "5 von 6",
+                    "rules": [
+                        "roles.extra_superusers",
+                        "roles.server_file_access",
+                        "roles.createrole",
+                        "roles.createrole_self_grant",
+                        "roles.bypassrls",
+                        "os.service_account"
+                    ]
+                },
+                {
+                    "control": "4.2",
+                    "title": "Passwortlebensdauer, Passwortstärke und Passwortrichtlinie",
+                    "state": "Befund",
+                    "rules_clean": "1 von 3",
+                    "rules": [
+                        "auth.passwordless_or_expired",
+                        "auth.weak_passwords",
+                        "auth.password_policy"
+                    ]
+                },
+                {
+                    "control": "4.3",
+                    "title": "Einschränkung der Rechte von PUBLIC auf Datenbanken und Schemas",
+                    "state": "Befund",
+                    "rules_clean": "1 von 5",
+                    "rules": [
+                        "db.public_schema_create",
+                        "db.public_temp",
+                        "db.public_connect",
+                        "db.catalog_visibility",
+                        "db.default_acl_public"
+                    ]
+                },
+                {
+                    "control": "4.4",
+                    "title": "Zeilensicherheit (RLS) und sichere SECURITY-DEFINER-Funktionen",
+                    "state": "Befund",
+                    "rules_clean": "1 von 3",
+                    "rules": [
+                        "db.rls_policies_inactive",
+                        "roles.bypassrls",
+                        "code.secdef_search_path"
+                    ]
+                },
+                {
+                    "control": "5.1",
+                    "title": "Anmeldung über lokalen Socket und Netzwerk (pg_hba.conf)",
+                    "state": "Befund",
+                    "rules_clean": "4 von 7",
+                    "rules": [
+                        "hba.trust",
+                        "hba.cleartext_password",
+                        "hba.md5_method",
+                        "hba.open_to_all",
+                        "hba.superuser_remote",
+                        "hba.weak_options",
+                        "hba.errors"
+                    ]
+                },
+                {
+                    "control": "6.1",
+                    "title": "Lauschadressen und Verbindungszeitgrenzen",
+                    "state": "Befund",
+                    "rules_clean": "2 von 4",
+                    "rules": [
+                        "net.listen_addresses",
+                        "auth.authentication_timeout",
+                        "auth.auth_delay",
+                        "sess.idle_in_transaction"
+                    ]
+                },
+                {
+                    "control": "6.2",
+                    "title": "Backend-Parameter, Laufzeit-Overrides und ALTER SYSTEM",
+                    "state": "Befund",
+                    "rules_clean": "3 von 5",
+                    "rules": [
+                        "roles.allow_alter_system",
+                        "conf.role_db_overrides",
+                        "data.crash_safety",
+                        "avail.temp_file_limit",
+                        "os.disk_free"
+                    ]
+                },
+                {
+                    "control": "6.3",
+                    "title": "Vorab geladene Bibliotheken, Erweiterungen, Sprachen und Trigger",
+                    "state": "Sichtung nötig",
+                    "rules_clean": "2 von 5",
+                    "rules": [
+                        "code.preload_libraries",
+                        "code.extensions",
+                        "code.untrusted_languages",
+                        "code.lo_compat_privileges",
+                        "code.event_triggers"
+                    ]
+                },
+                {
+                    "control": "6.4",
+                    "title": "TLS-Konfiguration, Schlüsselrechte und Zertifikatslaufzeit",
+                    "state": "Befund",
+                    "rules_clean": "4 von 6",
+                    "rules": [
+                        "tls.ssl_enabled",
+                        "tls.min_protocol",
+                        "tls.ciphers",
+                        "hba.host_without_tls",
+                        "os.ssl_key_permissions",
+                        "os.ssl_cert_expiry"
+                    ]
+                },
+                {
+                    "control": "6.5",
+                    "title": "Kryptografische Passwortspeicherung (SCRAM-SHA-256)",
+                    "state": "Befund",
+                    "rules_clean": "1 von 2",
+                    "rules": [
+                        "auth.password_encryption",
+                        "auth.md5_passwords"
+                    ]
+                },
+                {
+                    "control": "7.1",
+                    "title": "Replikationskonten, WAL-Archivierung und Replikations-Slots",
+                    "state": "Befund",
+                    "rules_clean": "4 von 5",
+                    "rules": [
+                        "roles.replication_login",
+                        "avail.archive_enabled",
+                        "avail.archiver_failing",
+                        "avail.slot_wal_keep",
+                        "avail.inactive_slots"
+                    ]
+                },
+                {
+                    "control": "7.2",
+                    "title": "Geheimnisschutz bei Foreign Data Wrappern und logischer Replikation",
+                    "state": "ohne Befund",
+                    "rules_clean": "1 von 1",
+                    "rules": [
+                        "code.fdw_secrets"
+                    ]
+                }
+            ]
         },
         "iso27001-2022": {
             "framework": "ISO/IEC 27001:2022 Annex A",
@@ -1323,14 +2068,17 @@
                     "control": "5.15",
                     "title": "Zugangssteuerung",
                     "state": "Befund",
-                    "rules_clean": "1 von 8",
+                    "rules_clean": "4 von 11",
                     "rules": [
                         "hba.open_to_all",
                         "hba.superuser_remote",
                         "db.public_schema_create",
                         "db.public_temp",
+                        "db.default_acl_public",
+                        "db.rls_policies_inactive",
                         "roles.bypassrls",
                         "os.pgdata_permissions",
+                        "os.tablespace_permissions",
                         "db.public_connect",
                         "db.catalog_visibility"
                     ]
@@ -1339,23 +2087,27 @@
                     "control": "5.17",
                     "title": "Authentisierungsinformationen",
                     "state": "Befund",
-                    "rules_clean": "1 von 4",
+                    "rules_clean": "3 von 6",
                     "rules": [
                         "auth.password_encryption",
                         "auth.md5_passwords",
+                        "auth.passwordless_or_expired",
                         "auth.weak_passwords",
-                        "auth.password_policy"
+                        "auth.password_policy",
+                        "code.fdw_secrets"
                     ]
                 },
                 {
                     "control": "8.2",
                     "title": "Privilegierte Zugriffsrechte",
                     "state": "Befund",
-                    "rules_clean": "5 von 7",
+                    "rules_clean": "7 von 9",
                     "rules": [
                         "roles.extra_superusers",
                         "roles.server_file_access",
+                        "roles.replication_login",
                         "roles.createrole",
+                        "roles.createrole_self_grant",
                         "roles.bypassrls",
                         "code.secdef_search_path",
                         "code.untrusted_languages",
@@ -1366,12 +2118,15 @@
                     "control": "8.3",
                     "title": "Einschränkung des Informationszugangs",
                     "state": "Befund",
-                    "rules_clean": "5 von 8",
+                    "rules_clean": "8 von 11",
                     "rules": [
                         "db.public_schema_create",
+                        "db.default_acl_public",
+                        "db.rls_policies_inactive",
                         "code.lo_compat_privileges",
                         "roles.bypassrls",
                         "os.pgdata_permissions",
+                        "os.tablespace_permissions",
                         "os.config_permissions",
                         "os.log_permissions",
                         "os.umask",
@@ -1382,11 +2137,13 @@
                     "control": "8.5",
                     "title": "Sichere Authentisierung",
                     "state": "Befund",
-                    "rules_clean": "4 von 8",
+                    "rules_clean": "6 von 10",
                     "rules": [
                         "hba.trust",
                         "hba.cleartext_password",
                         "hba.md5_method",
+                        "hba.weak_options",
+                        "auth.passwordless_or_expired",
                         "auth.weak_passwords",
                         "auth.authentication_timeout",
                         "auth.auth_delay",
@@ -1424,13 +2181,15 @@
                     "control": "8.9",
                     "title": "Konfigurationsmanagement",
                     "state": "Befund",
-                    "rules_clean": "3 von 7",
+                    "rules_clean": "4 von 9",
                     "rules": [
                         "roles.allow_alter_system",
                         "hba.errors",
                         "conf.role_db_overrides",
                         "code.preload_libraries",
                         "code.extensions",
+                        "code.event_triggers",
+                        "data.crash_safety",
                         "os.config_permissions",
                         "os.service_unit"
                     ]
@@ -1439,17 +2198,19 @@
                     "control": "8.13",
                     "title": "Sicherung von Information",
                     "state": "Befund",
-                    "rules_clean": "1 von 2",
+                    "rules_clean": "2 von 4",
                     "rules": [
                         "avail.archive_enabled",
-                        "avail.archiver_failing"
+                        "avail.archiver_failing",
+                        "data.checksums",
+                        "data.crash_safety"
                     ]
                 },
                 {
                     "control": "8.15",
                     "title": "Protokollierung",
                     "state": "Befund",
-                    "rules_clean": "3 von 10",
+                    "rules_clean": "3 von 11",
                     "rules": [
                         "log.collector",
                         "log.connections",
@@ -1457,6 +2218,7 @@
                         "log.line_prefix",
                         "log.statement_ddl",
                         "log.pgaudit",
+                        "log.lock_waits",
                         "log.parameter_length",
                         "log.debug_print",
                         "log.file_mode",
@@ -1479,22 +2241,25 @@
                     "control": "8.24",
                     "title": "Verwendung von Kryptografie",
                     "state": "Befund",
-                    "rules_clean": "3 von 5",
+                    "rules_clean": "5 von 7",
                     "rules": [
                         "tls.ssl_enabled",
                         "tls.min_protocol",
+                        "tls.ciphers",
                         "hba.host_without_tls",
                         "auth.password_encryption",
-                        "os.ssl_key_permissions"
+                        "os.ssl_key_permissions",
+                        "os.ssl_cert_expiry"
                     ]
                 },
                 {
                     "control": "8.28",
                     "title": "Sichere Programmierung",
                     "state": "Befund",
-                    "rules_clean": "0 von 1",
+                    "rules_clean": "0 von 2",
                     "rules": [
-                        "code.secdef_search_path"
+                        "code.secdef_search_path",
+                        "code.event_triggers"
                     ]
                 }
             ]

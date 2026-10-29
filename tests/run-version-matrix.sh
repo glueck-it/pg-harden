@@ -1,6 +1,6 @@
 #!/bin/sh
 # Version matrix: one throw-away container per PostgreSQL image, PHP installed inside, then
-#   1. check --format=json            -> <out>/<tag>.check.json   (rule status per version)
+#   1. check -o /tmp/check.json       -> <out>/<tag>.check.json   (rule status per version)
 #   2. tests/lab-matrix.sh            -> <out>/<tag>.matrix.txt   (apply/rollback regression)
 #   3. tests/lab-visibility.sh        -> <out>/<tag>.visibility.txt (in a second, pristine container)
 # Usage (from the tool directory; Git Bash on Windows needs MSYS_NO_PATHCONV=1):
@@ -40,7 +40,7 @@ for tag in "$@"; do
   (cd "$TOOL" && docker cp pg-harden.php "$NAME:/opt/pgh/" && docker cp src "$NAME:/opt/pgh/" && docker cp rules "$NAME:/opt/pgh/" \
     && docker cp mappings "$NAME:/opt/pgh/" && docker cp tests "$NAME:/opt/pgh/") || { echo "Kopieren fehlgeschlagen — $tag übersprungen" >&2; cleanup; continue; }
   docker exec "$NAME" sh -c 'cp /opt/pgh/tests/scram.sql /tmp/scram.sql'
-  docker exec "$NAME" sh -c 'cd /opt/pgh && php pg-harden.php check --host=127.0.0.1 --user=postgres --sslmode=disable --format=json > /tmp/check.json 2>/tmp/check.err; echo "check exit=$?"'
+  docker exec "$NAME" sh -c 'cd /opt/pgh && php pg-harden.php check --host=127.0.0.1 --user=postgres --sslmode=disable -o /tmp/check.json > /dev/null 2>/tmp/check.err; echo "check exit=$?"'
   docker cp "$NAME:/tmp/check.json" "$OUT/$tag.check.json"
   docker cp "$NAME:/tmp/check.err" "$OUT/$tag.check.err"
   docker exec -e PGHARDEN_LAB=1 "$NAME" sh -c 'TOOL=/opt/pgh sh /opt/pgh/tests/lab-matrix.sh' > "$OUT/$tag.matrix.txt" 2>&1

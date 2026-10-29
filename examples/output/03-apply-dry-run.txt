@@ -1,4 +1,4 @@
-pg-harden 0.3.2 · apply · Trockenlauf · 26.10.2026 16:10 (+00:00)
+pg-harden 0.4.0 · apply · Trockenlauf · 29.10.2026 13:50 (+00:00)
 Server        127.0.0.1:5432 · PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) · Benutzer postgres
 
 GEPLANTE ÄNDERUNGEN
@@ -15,7 +15,8 @@ GEPLANTE ÄNDERUNGEN
 NICHT AUSGEFÜHRT
   Brauchen eine Freigabe mit --include-confirm=<Kennung>:
     hba.host_without_tls, hba.trust, roles.allow_alter_system, db.public_temp, db.public_connect,
-    db.catalog_visibility, log.collector, log.line_prefix, log.statement_ddl, log.parameter_length
+    db.catalog_visibility, log.collector, log.line_prefix, log.statement_ddl, log.lock_waits,
+    log.parameter_length
 
 Trockenlauf — nichts geändert. Ausführen mit --execute --dir=<NEUES_VERZEICHNIS> (Sicherungen und Journal).
 

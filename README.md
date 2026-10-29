@@ -10,7 +10,7 @@ It covers `postgresql.conf`, `pg_hba.conf`, TLS, SCRAM-SHA-256 password storage,
 
 - **86 rules** (74 for `check`, 12 for `client`), each with severity, rationale, remediation and — where it is safe — a SQL or
   configuration fix with its rollback
-- **Read-only by default:** `check`, `plan`, `verify`, `client` and `rules` are designed not to write to the server. Every database check runs as a single
+- **Read-only by default:** `check`, `plan`, `client` and `rules` are designed not to write to the server. Every database check runs as a single
   prepared statement in `BEGIN TRANSACTION READ ONLY … ROLLBACK`
 - **`apply` with a safety net:** dry run first, backup journal, validation by the server itself (`pg_hba_file_rules`, `pg_file_settings`),
   a new login test after the reload, automatic restore on failure, and `rollback` afterwards. It is designed never to restart the server
@@ -78,9 +78,9 @@ Exception: if `SELECT` on `pg_database` is missing (after `db.catalog_visibility
 
 ```bash
 php pg-harden.php check  --host=db1 --user=postgres                       # report in the terminal
-php pg-harden.php check  --host=db1 --user=postgres --format=html --out=report.html
+php pg-harden.php check  --host=db1 --user=postgres -o audit.%y%m%d        # writes audit.261028.json and audit.261028.html
+php pg-harden.php check  --host=db1 --user=postgres -f audit.261021 -o audit.261028   # comparison: fixed, new, still open
 php pg-harden.php plan   --host=db1 --user=postgres --dir=plan-2026-10-23  # new directory, writes files only
-php pg-harden.php verify --host=db1 --user=postgres --previous=plan-2026-10-23/report.json
 php pg-harden.php client [--user=account] [--scan=/opt/backup,/srv/compose]  # audit this machine, no database connection
 php pg-harden.php apply  --host=db1 --user=postgres                        # dry run: shows what would happen
 php pg-harden.php apply  --host=db1 --user=postgres --execute --dir=apply-2026-10-24 [--yes]
@@ -89,12 +89,24 @@ php pg-harden.php check  --host=db1 --user=postgres --extra-candidates=company-t
 php pg-harden.php rules
 ```
 
-**HTML report** (`--format=html` for `check`, `verify` and `client`): one file without external resources or scripts — the outline of the
-text report with an overview on top, a colour per severity, a print layout and dark mode. A Content Security Policy admits only the
-embedded stylesheet; every value from the server or a previous report is escaped.
+**Report and comparison** (`check` and `client`): without `-o` the report is printed as text in the terminal. `-o NAME` (`--output`)
+writes `NAME.json` and `NAME.html`; the terminal then only names the files and the number of findings. A name ending in `.json`, `.html`,
+`.htm` or `.txt` writes just that one file; any other dot belongs to the name (`-o audit.261028`). `-f NAME` (`--file`) compares with an
+earlier report and reads `NAME.json` — the earlier run's name with the date filled in
+(`-f audit.261021`, not `audit.%y%m%d`); only a run that wrote JSON can be compared. Existing files of the same name are replaced — a
+second run with `-o audit.%y%m%d` on the same day replaces the first (add `%H%M` then).
+
+Placeholders as in PostgreSQL's `log_filename` put date and time into the name: `%Y` `%y` `%m` `%d` `%H` `%M` `%S`, `%%` for a percent
+sign — `-o audit.%y%m%d` gives `audit.261028.json` and `.html`. The time is the start of the run (PHP's time zone, `date.timezone`). In a
+Windows `.bat` file double every `%` (`-o audit.%%y%%m%%d`). To let the shell insert the date instead: `-o audit.$(date +%y%m%d)` (bash)
+or `-o "audit.$(Get-Date -f yyMMdd)"` (PowerShell).
+
+The HTML report is one file without external resources or scripts — the outline of the text report with an overview on top, a colour per
+severity, a print layout and dark mode. A Content Security Policy admits only the embedded stylesheet; every value from the server or a
+previous report is escaped.
 
 **See exactly what it produces:** [examples/](examples/) contains the real output of every command against a sample instance — report
-(text and HTML), plan files, dry run, `apply` with its journal, `verify`, `rollback`, `rules`, `client`, and the lockout protection refusing a
+(text and HTML), plan files, dry run, `apply` with its journal, the comparison, `rollback`, `rules`, `client`, and the lockout protection refusing a
 `pg_hba.conf` change.
 
 Connection: `--host`, `--port`, `--user`, `--dbname` (entry database, default `postgres`), `--sslmode`, `--databases=a,b`. As in psql,
@@ -105,7 +117,7 @@ of the machine. Help: `--help` or `-?` (`-h` is the host, as in psql). Without `
 Behind PgBouncer in transaction pooling session settings are not reliable — connect directly.
 
 Exit codes: `0` no findings · `1` findings · `3` no findings, but not everything was checked (missing rights, errors, skipped or locked
-databases; for `verify` also a different server, user or scope) · `2` abort (also unknown options; for `apply`/`rollback` a failed run).
+databases; when comparing with `-f` also a different server, user or scope) · `2` abort (also unknown options; for `apply`/`rollback` a failed run).
 
 ## The plan
 
@@ -116,14 +128,14 @@ The plan is an **automatically generated proposal**. Check the effect on your ap
 | `90-pg-harden.conf` | Parameters for `include_dir 'conf.d'` (at the end of `postgresql.conf`). Warns if a value comes from the command line, `postgresql.auto.conf` or `ALTER DATABASE/ROLE … SET` and the file therefore has no effect |
 | `harden_<db>.sql` | SQL fixes per database in one transaction, each with its way back as a comment. The first statement aborts if the file runs in another database. Connect to the target database itself and run it with `psql -v ON_ERROR_STOP=1 -f <file>` |
 | `MANUELL.md` ("manual items") | Findings without an automatic fix (also `pg_hba.conf` changes that only `apply` performs), objects that cannot be planned, rules not checked completely |
-| `report.json` | Baseline report for `verify` |
+| `report.json` | Baseline for the comparison: `check -f plan-2026-10-23/report` |
 
 Levels per rule: `auto` (low operational risk, active in the plan), `confirm` (commented out, enable deliberately), `manual` (only in
 `MANUELL.md`). Objects with control or format characters in their name (including bidi characters) and fix SQL with characters psql would
 interpret are never written to an SQL file. The plan directory must be new or empty and owned by the calling user; files are created
 exclusively, and nothing half-finished is left behind on abort.
 
-`verify` counts an earlier finding as fixed only if exactly that place — for database findings exactly that database — was checked again in the
+The comparison (`-f`) counts an earlier finding as fixed only if exactly that place — for database findings exactly that database — was checked again in the
 current run; otherwise it is reported as "not comparable".
 
 ## `apply` — run the plan, protected against lockouts
@@ -256,7 +268,7 @@ origin (Linux) or signature (Windows).
 
 ## `client` — the machine you connect from
 
-No database connection (`verify --previous=<client-report.json>` also compares earlier client reports). For the current account or (with `--user`, administrator/root required) another account: `pg_service.conf` with
+No database connection (`client -f NAME` compares with an earlier client report). For the current account or (with `--user`, administrator/root required) another account: `pg_service.conf` with
 `password=`, the password file (Windows ACL, location in cloud folders, on network shares or in roaming profiles, superuser entries with wildcard
 host, hidden lines, missing loopback entries; on Unix only a hint, because libpq ignores the file when its permissions are open anyway),
 `psql` command history (`psql_history` / `.psql_history` permissions and plaintext passwords), `PGPASSWORD` in environment and registry, passwords in profiles, scripts, compose and `.env` files, cron, systemd files and the Windows task
@@ -271,7 +283,7 @@ folders would be downloaded when read). More directories with `--scan=a,b`.
 
 ## Reports contain role, object and network names
 
-Role names are often personal identifiers, `pg_hba` lines contain networks. Reports (`--out`), plan and journal directories are written with file
+Role names are often personal identifiers, `pg_hba` lines contain networks. Reports (`-o`), plan and journal directories are written with file
 permissions for the executing account only (on Windows plus `SYSTEM` and `Administrators` via `icacls`). Store confidentially, check before passing
 to third parties, define a retention period.
 
@@ -315,9 +327,11 @@ against an instance with real data.
 
 ## Status
 
-0.4.0 (unreleased): Windows write side holds the server's directories against a swap for a junction via open directory handles without `FILE_SHARE_DELETE` (`WindowsPin`),
-handle-based ACL reading (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), restricted ACLs for journals and output files on Windows (checked when a journal is loaded), `verify`
-support for client reports, rule catalog expanded to 86 rules (74 for `check`, 12 for `client`), mappings for BSI IT-Grundschutz `APP.4.3`
+0.4.0 (unreleased): **command line recut** — `-o NAME` writes JSON and HTML, `-f NAME` compares with an earlier report, placeholders
+as in `log_filename` for the date; `--format`, `--out`, `--previous` and the command `verify` are gone (`verify` is now `check -f`).
+Windows write side holds the server's directories against a swap for a junction via open directory handles without `FILE_SHARE_DELETE` (`WindowsPin`),
+handle-based ACL reading (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), restricted ACLs for journals and output files on Windows (checked when a journal is loaded), comparison
+for client reports, rule catalog expanded to 86 rules (74 for `check`, 12 for `client`), mappings for BSI IT-Grundschutz `APP.4.3`
 (identifiers verified against the BSI original) and, preliminary, the CIS PostgreSQL Benchmark added. Details in [CHANGELOG.md](CHANGELOG.md).
 
 0.3.2 (2026-10-26): **security fix** for `check` and `client` as root (another account could make them read a file of root through a

@@ -1,10 +1,10 @@
-pg-harden 0.3.2 · Client-Prüfung · 26.10.2026 16:10 (+00:00)
-Rechner       eff335fe8c18 · Konto root
+pg-harden 0.4.0 · Client-Prüfung · 29.10.2026 13:50 (+00:00)
+Rechner       c782e1ca80d7 · Konto root
 Katalog       client 2026.10, postgresql 2026.10, system 2026.10 · Hinweise zu Verwendung und Gewähr am Ende
 
 ZUSAMMENFASSUNG
   1 Befund      1 hoch
-  8 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten · 1 übersprungen · 0 Fehler
+  9 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten · 1 übersprungen · 0 Fehler
 
 BEFUNDE — HOCH (1)
   client.secrets_in_files       Profile, Skripte, Compose-Dateien, Cron und Dienstdateien enthalten keine
@@ -31,8 +31,10 @@ ZU SICHTEN (1)
                                 lesbar
                                 → nur windows
 
-OHNE BEFUND (8)
+OHNE BEFUND (9)
   client.env_pgpassword         PGPASSWORD ist nicht in der Umgebung gesetzt
+  client.psql_history           psql-Befehlshistorie ist nur für das Konto lesbar und enthält keine Passwörter
+                                → Keine psql-Historie gefunden
   client.service_file_password  pg_service.conf enthält kein Passwort
                                 → Keine pg_service.conf gefunden
   client.pgpass_location        Passwortdatei liegt nicht auf einer Netzfreigabe, in einem Cloud-Ordner oder
@@ -49,15 +51,33 @@ OHNE BEFUND (8)
   client.cert_expiry            Client-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab
                                 → Kein Client-Zertifikat gefunden
 
+ZUORDNUNG BSI IT-GRUNDSCHUTZ-KOMPENDIUM (EDITION 2023), BAUSTEIN APP.4.3 RELATIONALE DATENBANKEN
+  Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber,
+  ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
+
+  Kennung  Ergebnis der Regeln         ohne Befund  Thema
+  APP.4.3.A3Befund                      7 von 9      Basishärtung des DBMS und kein Klartext für Passwörter (B)
+  APP.4.3.A16ohne Befund                 2 von 2      Verschlüsselung der Datenbankanbindung (S)
+  APP.4.3.A18ohne Befund                 1 von 1      Überwachung des Datenbankmanagementsystems (S)
+  APP.4.3.A25Befund                      0 von 1      Sicherheitsprüfungen von Datenbanksystemen (H)
+
+ZUORDNUNG CIS POSTGRESQL BENCHMARK (EIGENE GLIEDERUNG IN ANLEHNUNG AN DIE ABSCHNITTE 1–7) — Kennungen ungeprüft
+  Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber,
+  ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
+
+  Kennung  Ergebnis der Regeln         ohne Befund  Thema
+  5.2      Befund                      7 von 9      Sichere Passwortdateien und Anmeldeumgebung auf dem Client
+  6.4      ohne Befund                 2 von 2      TLS-Konfiguration, Schlüsselrechte und Zertifikatslaufzeit
+
 ZUORDNUNG ISO/IEC 27001:2022 ANNEX A — Kennungen ungeprüft
   Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber,
   ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
 
   Kennung  Ergebnis der Regeln         ohne Befund  Thema
-  5.17     Befund                      6 von 8      Authentisierungsinformationen
+  5.17     Befund                      7 von 9      Authentisierungsinformationen
   8.24     ohne Befund                 2 von 2      Verwendung von Kryptografie
 
-Ergebnis: 1 Befund (1 hoch) · 8 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten ·
+Ergebnis: 1 Befund (1 hoch) · 9 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten ·
   1 übersprungen · 0 Fehler
 
 ── Hinweise ──────────────────────────────────────────────────────────────────────────────────────────────────

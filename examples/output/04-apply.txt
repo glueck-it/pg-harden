@@ -1,4 +1,4 @@
-pg-harden 0.3.2 · apply · Ausführung · 26.10.2026 16:10 (+00:00)
+pg-harden 0.4.0 · apply · Ausführung · 29.10.2026 13:50 (+00:00)
 Server        127.0.0.1:5432 · PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) · Benutzer postgres
 
 GEPLANTE ÄNDERUNGEN
@@ -15,7 +15,8 @@ GEPLANTE ÄNDERUNGEN
 NICHT AUSGEFÜHRT
   Brauchen eine Freigabe mit --include-confirm=<Kennung>:
     hba.host_without_tls, hba.trust, roles.allow_alter_system, db.public_temp, db.public_connect,
-    db.catalog_visibility, log.collector, log.line_prefix, log.statement_ddl, log.parameter_length
+    db.catalog_visibility, log.collector, log.line_prefix, log.statement_ddl, log.lock_waits,
+    log.parameter_length
 
 ERGEBNIS
   [OK] Prüfung durch den Server: pg_hba_file_rules und pg_file_settings ohne Fehler
@@ -24,8 +25,8 @@ ERGEBNIS
        nicht Anwendungen und andere Rollen)
   [OK] SQL: 2 Anweisung(en) in Datenbank shop
 
-VERGLEICH MIT DEM BERICHT VOM 26.10.2026 16:10 (+00:00)
-  Behoben 4 · Neu 0 · Weiter offen 35 · Nicht vergleichbar (diesmal nicht erneut geprüft) 0
+VERGLEICH MIT DEM BERICHT VOM 29.10.2026 13:50 (+00:00)
+  Behoben 4 · Neu 0 · Weiter offen 36 · Nicht vergleichbar (diesmal nicht erneut geprüft) 0
 
   Behoben (4)
     hoch    code.secdef_search_path       SECURITY DEFINER-Funktionen haben einen festen search_path
@@ -37,7 +38,7 @@ VERGLEICH MIT DEM BERICHT VOM 26.10.2026 16:10 (+00:00)
     niedrig log.disconnections            Sitzungsende wird protokolliert
                                           - log_disconnections
 
-  Weiter offen (35)
+  Weiter offen (36)
     hoch    auth.md5_passwords            Keine Rolle hat noch ein MD5-Passwort
                                           - reporting
     hoch    auth.weak_passwords           Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste
@@ -67,7 +68,7 @@ VERGLEICH MIT DEM BERICHT VOM 26.10.2026 16:10 (+00:00)
                                           - logging_collector
     mittel  log.line_prefix               Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle
                                           - log_line_prefix
-    mittel  log.pgaudit                   pgAudit ist geladen
+    mittel  log.pgaudit                   pgAudit ist geladen und eingerichtet
                                           - shared_preload_libraries
     mittel  roles.bypassrls               Row-Level Security umgehen nur Superuser
                                           - support
@@ -79,6 +80,8 @@ VERGLEICH MIT DEM BERICHT VOM 26.10.2026 16:10 (+00:00)
                                           - [postgres] postgres, [shop] shop, [template1] template1
     niedrig db.public_temp                Temporäre Tabellen nur für berechtigte Rollen
                                           - [postgres] postgres, [shop] shop
+    niedrig log.lock_waits                Lange Sperrwartezeiten werden protokolliert
+                                          - log_lock_waits
     niedrig log.parameter_length          Parameterwerte werden nicht vollständig protokolliert
                                           - log_parameter_max_length
     niedrig log.statement_ddl             Strukturänderungen werden protokolliert
@@ -93,6 +96,7 @@ VERGLEICH MIT DEM BERICHT VOM 26.10.2026 16:10 (+00:00)
 
 JOURNAL
   Verzeichnis /root/journal (Sicherungen, Berichte vorher/nachher, Protokoll)
+  Protokoll   /root/journal/apply.html (HTML, im Browser öffnen)
   Rückgängig  php pg-harden.php rollback --dir=/root/journal (gleiche Verbindung)
 
 ── Hinweise ──────────────────────────────────────────────────────────────────────────────────────────────────

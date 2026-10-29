@@ -3,7 +3,7 @@ declare(strict_types=1);
 
 /**
  * Offline test of the HTML report (HtmlRenderer): a report full of hostile values — markup, quotes, control, bidi and
- * zero-width characters, an unknown severity in the previous report of verify — must come out escaped, as one file
+ * zero-width characters, an unknown severity in the earlier report of a comparison (-f) — must come out escaped, as one file
  * without any external resource, with a CSP that admits exactly the one stylesheet. Runs without a PostgreSQL server:
  * php tests/html-report-test.php
  */
@@ -63,7 +63,7 @@ $mappings = [
 ];
 $report = ['meta' => $meta, 'results' => $results, 'mappings' => $mappings];
 
-// verify: the previous report is a file of unknown origin — unknown severities, hostile names; one finding fixed on a fully
+// Vergleich (-f): the previous report is a file of unknown origin — unknown severities, hostile names; one finding fixed on a fully
 // checked rule, one on a rule this run no longer has (not comparable).
 $previous = $report;
 $previous['meta']['created_at'] = "gestern $evil";
@@ -105,7 +105,7 @@ $rollbackLog = [
   'steps' => [['status' => 'FEHLER', 'message' => "nicht $evil"], ['status' => 'WARNUNG', 'message' => 'w']],
 ];
 
-$cases = ['check' => $report, 'verify' => $compared, 'client' => $client];
+$cases = ['check' => $report, 'check -f' => $compared, 'client' => $client];
 $pages = [];
 foreach ($cases as $name => $r) {
   try {
@@ -189,8 +189,8 @@ $check('rollback: abgeschlossen', str_contains($pages['rollback-ok'] ?? '', '<p 
 $check('Protokolle nennen sich Protokoll', str_contains($pages['rollback'] ?? '', 'Das Protokoll enthält Rollen-'));
 
 $html = HtmlRenderer::render($compared);
-$check('verify: Vergleichsabschnitt', str_contains($html, 'id="comparison"') && str_contains($html, 'Behoben 1') && str_contains($html, 'Neu 0'));
-$check('verify: unbekannte Schwere des Vorberichts bleibt leer', $compared['comparison']['fixed'][0]['severity'] === null);
+$check('Vergleich: Vergleichsabschnitt', str_contains($html, 'id="comparison"') && str_contains($html, 'Behoben 1') && str_contains($html, 'Neu 0'));
+$check('Vergleich: unbekannte Schwere des Vorberichts bleibt leer', $compared['comparison']['fixed'][0]['severity'] === null);
 $check('Zuordnung ohne Treffer fehlt', !str_contains($html, 'Ohne Treffer'));
 $check('unbekannter Zuordnungsstand grau', str_contains($html, '<span class="badge k-skip">unbekannt &lt;script&gt;'));
 $check('Befund unvollständig gekennzeichnet', str_contains($html, '<span class="badge k-incomplete">nicht vollständig geprüft</span>'));

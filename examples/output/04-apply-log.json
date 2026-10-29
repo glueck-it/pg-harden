@@ -1,35 +1,35 @@
 {
-    "tool": "pg-harden 0.3.2",
-    "started_at": "2026-10-26T16:10:50+00:00",
+    "tool": "pg-harden 0.4.0",
+    "started_at": "2026-10-29T13:50:13+00:00",
     "server": "127.0.0.1:5432",
     "server_version": "18.6 (Debian 18.6-1.pgdg13+2)",
     "user": "postgres",
     "identity": {
         "data_directory": "/var/lib/postgresql/18/docker",
-        "system_identifier": "7701009644634087468"
+        "system_identifier": "7702086670830899244"
     },
     "journal_version": 1,
     "steps": [
         {
-            "at": "2026-10-26T16:10:50+00:00",
+            "at": "2026-10-29T13:50:13+00:00",
             "phase": "Prüfung durch den Server",
             "status": "OK",
             "message": "pg_hba_file_rules und pg_file_settings ohne Fehler"
         },
         {
-            "at": "2026-10-26T16:10:50+00:00",
+            "at": "2026-10-29T13:50:13+00:00",
             "phase": "Neuladen",
             "status": "OK",
             "message": "Konfiguration neu geladen"
         },
         {
-            "at": "2026-10-26T16:10:50+00:00",
+            "at": "2026-10-29T13:50:13+00:00",
             "phase": "Anmeldetest",
             "status": "OK",
             "message": "neue Anmeldung mit denselben Zugangsdaten funktioniert (geprüft ist nur diese Anmeldung, nicht Anwendungen und andere Rollen)"
         },
         {
-            "at": "2026-10-26T16:10:50+00:00",
+            "at": "2026-10-29T13:50:13+00:00",
             "phase": "SQL",
             "status": "OK",
             "message": "2 Anweisung(en) in Datenbank shop"
@@ -68,6 +68,6 @@
             "status": "committed"
         }
     ],
-    "finished_at": "2026-10-26T16:10:50+00:00",
+    "finished_at": "2026-10-29T13:50:13+00:00",
     "failed": false
 }

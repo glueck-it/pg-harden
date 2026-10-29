@@ -54,8 +54,10 @@ $parses('Kurzformen mit Leerzeichen', ['check', '-h', 'db1', '-p', '5433', '-U',
   ['command' => 'check', 'host' => 'db1', 'port' => '5433', 'user' => 'postgres', 'dbname' => 'app']);
 $parses('Kurzformen zusammengeschrieben', ['check', '-hdb1', '-p5433', '-Upostgres', '-dapp'],
   ['host' => 'db1', 'port' => '5433', 'user' => 'postgres', 'dbname' => 'app']);
-$parses('lange Namen mit Leerzeichen', ['check', '--host', 'db1', '--out', 'bericht.html', '--format', 'html'],
-  ['host' => 'db1', 'out' => 'bericht.html', 'format' => 'html']);
+$parses('lange Namen mit Leerzeichen', ['check', '--host', 'db1', '--output', 'bericht', '--file', 'alt'],
+  ['host' => 'db1', 'output' => 'bericht', 'file' => 'alt']);
+$parses('-o und -f als Kurzformen', ['check', '-f', 'audit.261021', '-o', 'audit.%y%m%d'], ['file' => 'audit.261021', 'output' => 'audit.%y%m%d']);
+$parses('-o zusammengeschrieben', ['client', '-obericht.html'], ['command' => 'client', 'output' => 'bericht.html']);
 $parses('psql-Name --username', ['check', '--username', 'postgres'], ['user' => 'postgres']);
 $parses('Optionen vor dem Befehl', ['-h', 'db1', 'check'], ['command' => 'check', 'host' => 'db1']);
 $parses('Hilfe -?', ['-?'], ['help' => '1']);
@@ -81,13 +83,55 @@ $refuses('Schalter mit Wert', ['apply', '--execute=1'], 'Schalter');
 $refuses('Kurzform-Schalter mit Wert', ['-?x'], 'Schalter');
 $refuses('zweiter Befehl', ['check', 'plan'], 'Unbekanntes Argument');
 $refuses('Wert vergessen, Befehl als Wert verschluckt', ['--host', 'check'], 'Kein Befehl angegeben');
-$refuses('Optionen ohne Befehl', ['--format=json'], 'Kein Befehl angegeben');
+$refuses('Optionen ohne Befehl', ['-o', 'bericht'], 'Kein Befehl angegeben');
+$refuses('alte Option --format gibt es nicht mehr', ['check', '--format=json'], 'Unbekannte Option --format');
+$refuses('alte Option --out gibt es nicht mehr', ['check', '--out=x.html'], 'Unbekannte Option --out');
+$refuses('alte Option --previous gibt es nicht mehr', ['check', '--previous=x.json'], 'Unbekannte Option --previous');
+$refuses('-o doppelt', ['check', '-o', 'a', '--output=b'], 'mehrfach');
 $parses('ohne Argumente: Hilfe', [], ['command' => '']);
-$parses('Hilfe gewinnt gegen kaputte Option', ['--help', '--format'], ['help' => '1']);
+$parses('Hilfe gewinnt gegen kaputte Option', ['--help', '-o'], ['help' => '1']);
 $parses('-? gewinnt gegen kaputte Option', ['check', '-h', '-?'], ['help' => '1']);
 $parses('Schalter vor dem Befehl', ['--execute', 'apply', '--dir=x'], ['command' => 'apply', 'execute' => '1']);
 // libpq nimmt einen Datenbanknamen mit "=" nicht als Verbindungsstring (gemessen: die ganze Zeichenkette ist der Name)
 $parses('Datenbankname mit = und Leerzeichen bleibt ein Name', ['check', '-d', 'app port=1'], ['dbname' => 'app port=1']);
+
+// Namen von -o und -f (ReportName): Endung wählt das Format, jeder andere Punkt gehört zum Namen; Platzhalter wie log_filename
+$at = new DateTimeImmutable('2026-10-28 07:05:09');
+$names = function (string $name, string $input, string|array $want, ?string $kind = 'outputs') use (&$failed, &$total, $at): void {
+  $total++;
+  try {
+    $got = $kind === 'outputs' ? ReportName::outputs($input, $at) : ReportName::previous($input);
+  } catch (HardenException $e) {
+    $got = 'abgewiesen: ' . $e->getMessage();
+  }
+  $ok = is_array($want) ? $got === $want : is_string($got) && str_contains($got, $want);
+  if (!$ok) {
+    $failed++;
+    echo "FEHLER $name: " . var_export($got, true) . ' (erwartet ' . var_export($want, true) . ")\n";
+  }
+};
+$names('-o ohne Endung: JSON und HTML', 'bericht', ['bericht.json' => 'json', 'bericht.html' => 'html']);
+$names('-o Punkt im Namen ist keine Endung', 'audit.261028', ['audit.261028.json' => 'json', 'audit.261028.html' => 'html']);
+$names('-o .json allein', 'r.json', ['r.json' => 'json']);
+$names('-o .html allein', 'r.html', ['r.html' => 'html']);
+$names('-o .htm ist HTML', 'r.htm', ['r.htm' => 'html']);
+$names('-o .txt ist Text', 'r.txt', ['r.txt' => 'text']);
+$names('-o Endung ohne Rücksicht auf Groß/klein', 'R.JSON', ['R.JSON' => 'json']);
+$names('-o Punkt im Verzeichnis', 'out.v2/bericht', ['out.v2/bericht.json' => 'json', 'out.v2/bericht.html' => 'html']);
+$names('-o Platzhalter', 'audit.%y%m%d', ['audit.261028.json' => 'json', 'audit.261028.html' => 'html']);
+$names('-o alle Platzhalter', '%Y-%m-%d_%H%M%S.txt', ['2026-10-28_070509.txt' => 'text']);
+$names('-o %% ist ein Prozentzeichen', '100%%.json', ['100%.json' => 'json']);
+$names('-o unbekannter Platzhalter', 'audit.%a', 'unbekannter Platzhalter %a');
+$names('-o % am Ende', 'audit%', 'unbekannter Platzhalter %');
+$names('-o Verzeichnis statt Name', 'berichte/', 'kein Verzeichnis');
+$names('-o nur Endung', '.json', 'Namen vor der Endung');
+$names('-o nur Punkt', '.', 'Namen vor der Endung');
+$names('-o Punkte im Verzeichnis, Name leer', 'x/..html', 'Namen vor der Endung');
+$names('-o versteckter Stamm mit Namen bleibt erlaubt', '.audit', ['.audit.json' => 'json', '.audit.html' => 'html']);
+$names('-f ohne Endung liest .json', 'audit.261021', 'audit.261021.json', 'previous');
+$names('-f mit .json', 'alt.json', 'alt.json', 'previous');
+$names('-f mit .html abgewiesen', 'alt.html', 'JSON-Bericht', 'previous');
+$names('-f mit .txt abgewiesen', 'alt.txt', 'JSON-Bericht', 'previous');
 
 echo $failed === 0 ? "OK: $total Fälle\n" : "FEHLER: $failed von $total Fällen\n";
 exit($failed === 0 ? 0 : 1);

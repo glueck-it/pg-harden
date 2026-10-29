@@ -69,13 +69,20 @@ function Check-Case([string]$Name, [string]$Want, [scriptblock]$Action) {
   }
 }
 
-# client --user=<Testkonto> als JSON; was kein JSON ist (Fehlermeldung von pg-harden), wird gezeigt statt das Skript abzubrechen.
+# client --user=<Testkonto> als JSON-Datei (-o); fehlt sie, wird die Ausgabe von pg-harden gezeigt statt das Skript abzubrechen.
 function Invoke-ClientJson([string]$User) {
   # Windows PowerShell 5.1 macht mit "Stop" und 2>&1 schon aus der ersten stderr-Zeile einen Abbruch: hier nur sammeln.
   $ErrorActionPreference = 'Continue'
-  $raw = (& $script:phpPath $script:entryPoint client "--user=$User" --format=json 2>&1 | Out-String)
-  try { return ($raw | ConvertFrom-Json) } catch {}
-  Write-Host "FEHLER client --user lieferte kein JSON:`n$raw" -ForegroundColor Red
+  $file = Join-Path ([IO.Path]::GetTempPath()) ('pgh-client-' + [guid]::NewGuid().ToString('N') + '.json')
+  try {
+    $raw = (& $script:phpPath $script:entryPoint client "--user=$User" -o $file 2>&1 | Out-String)
+    if (Test-Path -LiteralPath $file) {
+      try { return (Get-Content -LiteralPath $file -Raw -Encoding UTF8 | ConvertFrom-Json) } catch {}
+    }
+  } finally {
+    Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
+  }
+  Write-Host "FEHLER client --user lieferte keinen JSON-Bericht:`n$raw" -ForegroundColor Red
   return [pscustomobject]@{ results = @() }
 }
 

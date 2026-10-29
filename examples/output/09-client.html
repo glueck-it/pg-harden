@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-0U4tv/e7I/zkMvl7x3Z60I/0jDw3nVQODKmLLjTlsb4='; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="light dark">
+<title>pg-harden — Client-Prüfung c782e1ca80d7</title>
+<style>:root{color-scheme:light dark;
+  --bg:#fff;--fg:#1f2328;--muted:#57606a;--line:#d0d7de;--panel:#f6f8fa;
+  --high:#b42318;--high-bg:#fdeceb;--medium:#a24100;--medium-bg:#fff0e0;--low:#7a5800;--low-bg:#fcf3cf;
+  --info:#0b57d0;--info-bg:#e8f0fe;--review:var(--info);--review-bg:var(--info-bg);--error:#7b2d9b;--error-bg:#f4e9fa;
+  --incomplete:#0b6577;--incomplete-bg:#dff2f6;--skip:#57606a;--skip-bg:#eef1f4;--pass:#17703a;--pass-bg:#e5f4e9}
+@media screen and (prefers-color-scheme:dark){:root{
+  --bg:#0f1216;--fg:#e6edf3;--muted:#9da7b3;--line:#30363d;--panel:#161b22;
+  --high:#ff8b80;--high-bg:#3d1714;--medium:#ffab5e;--medium-bg:#3a230d;--low:#e8c547;--low-bg:#30280b;
+  --info:#8ab4f8;--info-bg:#12233f;--error:#d2a8ff;--error-bg:#2b1a3d;
+  --incomplete:#5fd0e3;--incomplete-bg:#0d2c33;--skip:#9da7b3;--skip-bg:#21262d;--pass:#6dd58c;--pass-bg:#0f2e19}}
+.k-high{--k:var(--high);--kb:var(--high-bg)}.k-medium{--k:var(--medium);--kb:var(--medium-bg)}
+.k-low{--k:var(--low);--kb:var(--low-bg)}.k-info{--k:var(--info);--kb:var(--info-bg)}
+.k-review{--k:var(--review);--kb:var(--review-bg)}.k-error{--k:var(--error);--kb:var(--error-bg)}
+.k-incomplete{--k:var(--incomplete);--kb:var(--incomplete-bg)}.k-skip{--k:var(--skip);--kb:var(--skip-bg)}
+.k-pass{--k:var(--pass);--kb:var(--pass-bg)}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0 auto;max-width:72rem;padding:24px 16px 48px;font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  color:var(--fg);background:var(--bg)}
+h1{font-size:1.6rem;line-height:1.25;margin:.2rem 0 1rem}
+h1 .host{font-weight:400;overflow-wrap:anywhere}
+h2,h3{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+h2{font-size:1.15rem;margin:2rem 0 .6rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+h3{font-size:1rem;margin:1.2rem 0 .4rem}
+code,.id{font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;font-size:.86em}
+a{color:var(--info)}
+a:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+.tool,.note{color:var(--muted)}
+.tool{margin:0;font-size:.9rem}
+dl.meta{display:grid;grid-template-columns:max-content 1fr;gap:.25rem 1rem;margin:0 0 1rem}
+dl.meta dt{color:var(--muted)}
+dl.meta dd{margin:0;overflow-wrap:anywhere}
+dl.meta dd.warn{color:var(--high);font-weight:600}
+.confidential{margin:0;padding:.2rem .7rem;border-left:3px solid var(--line);color:var(--muted);font-size:.9rem}
+.toc ol{list-style:none;margin:1rem 0 0;padding:0;display:flex;flex-wrap:wrap;gap:.4rem}
+.toc a{display:inline-flex;align-items:center;gap:.4rem;padding:.2rem .65rem;border:1px solid var(--line);border-radius:999px;
+  background:var(--panel);color:var(--fg);font-size:.88rem;text-decoration:none}
+.toc a:hover{border-color:var(--fg)}
+.dot{flex:none;display:inline-block;width:.7rem;height:.7rem;border-radius:50%;background:var(--k,var(--muted))}
+.count{display:inline-block;min-width:1.7em;padding:0 .4em;border:1px solid var(--line);border-radius:999px;background:var(--panel);
+  font-size:.8rem;font-weight:600;text-align:center}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(9.5rem,1fr));gap:.5rem;margin:.6rem 0}
+.tile{display:block;padding:.55rem .8rem;border:1px solid var(--line);border-top:4px solid var(--k);border-radius:8px;
+  background:var(--panel);color:var(--fg);text-decoration:none}
+.tile .n{display:block;font-size:1.6rem;font-weight:700;line-height:1.15;color:var(--k)}
+.tile .l{font-size:.85rem;color:var(--muted)}
+.tile.zero{border-top-color:var(--line)}
+.tile.zero .n{color:var(--muted)}
+a.tile:hover{border-color:var(--k)}
+@media (min-width:30rem){.tile-main{grid-column:span 2}}
+.bar{display:block;width:100%;height:14px;margin:.8rem 0 .2rem;border-radius:7px;background:var(--line)}
+.bar rect{fill:var(--k);stroke:var(--bg);stroke-width:2px}
+.rules{list-style:none;margin:0;padding:0}
+.rule{margin:.45rem 0;padding:.5rem .8rem;border:1px solid var(--line);border-left:4px solid var(--k,var(--line));border-radius:6px}
+section.k-pass .rule,section.k-skip .rule{margin:.25rem 0;padding:.25rem .8rem}
+.rule-head{margin:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:.15rem .7rem}
+.rule-head .id{color:var(--muted);overflow-wrap:anywhere}
+.rule-title{font-weight:600}
+.rule .note{margin:.3rem 0 0;font-size:.9rem;overflow-wrap:anywhere}
+.rule .note::before{content:"→ " / ""}
+.findings{margin:.35rem 0 0;padding-left:1.2rem}
+.findings li{overflow-wrap:anywhere}
+.badge{display:inline-block;padding:.05rem .55rem;border-radius:999px;background:var(--kb);color:var(--k);
+  font-size:.8rem;font-weight:600;white-space:nowrap}
+.chips{list-style:none;margin:.5rem 0;padding:0;display:flex;flex-wrap:wrap;gap:.4rem}
+.banner{margin:.6rem 0;padding:.6rem .9rem;border:1px solid var(--line);border-left:4px solid var(--k);border-radius:6px;background:var(--kb)}
+.banner strong{color:var(--k)}
+.ids{line-height:1.9}
+.alert{margin:.5rem 0;padding:.5rem .8rem;border:1px solid var(--high);border-radius:6px;background:var(--high-bg)}
+.alert strong{color:var(--high)}
+.table-wrap{overflow-x:auto}
+table{width:100%;margin:.4rem 0;border-collapse:collapse;font-size:.9rem}
+th,td{padding:.35rem .55rem;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600}
+td{overflow-wrap:break-word;hyphens:auto}
+td code,td.id{hyphens:none}
+td.num,td.key{white-space:nowrap}
+.result{margin:2rem 0 0;padding:.7rem .9rem;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+footer{margin-top:2rem;color:var(--muted);font-size:.9rem}
+footer h2{color:var(--fg)}
+@media (max-width:30rem){dl.meta{grid-template-columns:1fr;gap:0}dl.meta dd{margin-bottom:.4rem}}
+@media screen and (max-width:40rem){
+  table.stack,table.stack tbody{display:block}
+  table.stack thead{display:none}
+  table.stack tr{display:block;padding:.45rem 0;border-bottom:1px solid var(--line)}
+  table.stack td{display:block;padding:.1rem 0;border:0;overflow-wrap:anywhere}
+  table.stack td.key,table.stack td.state{display:inline-block;margin-right:.5rem}
+  table.stack td[data-label]::before{content:attr(data-label) ": ";color:var(--muted)}
+}
+@media (forced-colors:active){.dot,.bar rect{forced-color-adjust:none}.badge,.count{border:1px solid}}
+@page{margin:14mm 12mm}
+@media print{
+  body{max-width:none;padding:0;font-size:9.5pt}
+  .toc{display:none}
+  a{color:inherit;text-decoration:none}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  h2,h3{break-after:avoid}
+  .rule,.tile,.alert,.result,tr{break-inside:avoid}
+  thead{display:table-header-group}
+  .table-wrap{overflow:visible}
+}</style>
+</head><body>
+<header>
+<p class="tool">pg-harden 0.4.0 · Client-Prüfung · 29.10.2026 13:50 (+00:00)</p>
+<h1>Client-Prüfung <span class="host">c782e1ca80d7</span></h1>
+<dl class="meta"><dt>Rechner</dt><dd>c782e1ca80d7 · Konto root</dd><dt>Katalog</dt><dd>client 2026.10, postgresql 2026.10, system 2026.10 · <a href="#notices">Hinweise zu Verwendung und Gewähr</a> am Ende</dd></dl>
+<p class="confidential">Der Bericht enthält Rollen-, Objekt- und Netznamen. Vertraulich ablegen und vor einer Weitergabe prüfen.</p>
+<nav class="toc" aria-label="Inhalt"><ol><li><a href="#summary">Zusammenfassung</a></li><li><a href="#findings-high"><span class="dot k-high" aria-hidden="true"></span>Befunde — hoch <span class="count">1</span></a></li><li><a href="#rules-info"><span class="dot k-review" aria-hidden="true"></span>Zu sichten <span class="count">1</span></a></li><li><a href="#rules-skip"><span class="dot k-skip" aria-hidden="true"></span>Übersprungen <span class="count">1</span></a></li><li><a href="#rules-pass"><span class="dot k-pass" aria-hidden="true"></span>Ohne Befund <span class="count">9</span></a></li><li><a href="#mapping-1">Zuordnung BSI IT-Grundschutz-Kompendium (Edition 2023), Baustein APP.4.3 Relationale Datenbanken</a></li><li><a href="#mapping-2">Zuordnung CIS PostgreSQL Benchmark (eigene Gliederung in Anlehnung an die Abschnitte 1–7)</a></li><li><a href="#mapping-3">Zuordnung ISO/IEC 27001:2022 Annex A</a></li><li><a href="#notices">Hinweise</a></li></ol></nav>
+</header>
+<main>
+<section id="summary"><h2>Zusammenfassung</h2><div class="tiles"><a class="tile k-high tile-main" href="#findings-high"><span class="n">1</span> <span class="l">Befund</span></a><a class="tile k-high" href="#findings-high"><span class="n">1</span> <span class="l">hoch</span></a><div class="tile k-medium zero"><span class="n">0</span> <span class="l">mittel</span></div><div class="tile k-low zero"><span class="n">0</span> <span class="l">niedrig</span></div><a class="tile k-pass" href="#rules-pass"><span class="n">9</span> <span class="l">ohne Befund</span></a><div class="tile k-incomplete zero"><span class="n">0</span> <span class="l">ohne Befund, aber nicht vollständig geprüft</span></div><a class="tile k-review" href="#rules-info"><span class="n">1</span> <span class="l">zu sichten</span></a><a class="tile k-skip" href="#rules-skip"><span class="n">1</span> <span class="l">übersprungen</span></a><div class="tile k-error zero"><span class="n">0</span> <span class="l">Fehler</span></div></div><svg class="bar" role="img" aria-label="Anteile aller 12 Regeln: 1 Befund (1 hoch) · 9 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten · 1 übersprungen · 0 Fehler" width="100%" height="14"><rect class="k-high" x="0.000%" y="0" width="8.333%" height="100%"/><rect class="k-review" x="8.333%" y="0" width="8.333%" height="100%"/><rect class="k-skip" x="16.667%" y="0" width="8.333%" height="100%"/><rect class="k-pass" x="25.000%" y="0" width="75.000%" height="100%"/></svg></section><section id="findings-high" class="k-high"><h2><span class="dot" aria-hidden="true"></span>Befunde — hoch <span class="count">1</span></h2><ul class="rules"><li class="rule"><p class="rule-head"><code class="id">client.secrets_in_files</code> <span class="rule-title">Profile, Skripte, Compose-Dateien, Cron und Dienstdateien enthalten keine Klartext-Passwörter</span></p><p class="note">Durchsucht: Profil-Dateien, systemweite Profile/Cron/Dienstdateien, Skripte/Compose/.env bis Tiefe 4 unter /root und --scan; Passwort-Muster: PGPASSWORD, Verbindungs-URI, POSTGRES_PASSWORD, password= in Verbindungszeichenfolgen</p><ul class="findings"><li>/usr/local/bin/docker-ensure-initdb.sh:46: setzt PGPASSWORD (Wert wird nicht ausgegeben)</li><li>/usr/local/bin/docker-entrypoint.sh:111: POSTGRES_PASSWORD im Klartext (Wert wird nicht ausgegeben)</li><li>/usr/local/bin/docker-entrypoint.sh:133: POSTGRES_PASSWORD im Klartext (Wert wird nicht ausgegeben)</li><li>/usr/local/bin/docker-entrypoint.sh:359: setzt PGPASSWORD (Wert wird nicht ausgegeben)</li></ul></li></ul></section><section id="rules-info" class="k-review"><h2><span class="dot" aria-hidden="true"></span>Zu sichten <span class="count">1</span></h2><ul class="rules"><li class="rule"><p class="rule-head"><code class="id">client.pgpass_mode</code> <span class="rule-title">Passwortdatei .pgpass hat Modus 0600 (Hinweis)</span></p><p class="note">Keine Passwortdatei gefunden (/root/.pgpass)</p></li></ul></section><section id="rules-skip" class="k-skip"><h2><span class="dot" aria-hidden="true"></span>Übersprungen <span class="count">1</span></h2><ul class="rules"><li class="rule"><p class="rule-head"><code class="id">client.pgpass_acl</code> <span class="rule-title">Passwortdatei pgpass.conf ist nur für das Konto, SYSTEM und Administratoren lesbar</span></p><p class="note">nur windows</p></li></ul></section><section id="rules-pass" class="k-pass"><h2><span class="dot" aria-hidden="true"></span>Ohne Befund <span class="count">9</span></h2><ul class="rules"><li class="rule"><p class="rule-head"><code class="id">client.env_pgpassword</code> <span class="rule-title">PGPASSWORD ist nicht in der Umgebung gesetzt</span></p></li><li class="rule"><p class="rule-head"><code class="id">client.psql_history</code> <span class="rule-title">psql-Befehlshistorie ist nur für das Konto lesbar und enthält keine Passwörter</span></p><p class="note">Keine psql-Historie gefunden</p></li><li class="rule"><p class="rule-head"><code class="id">client.service_file_password</code> <span class="rule-title">pg_service.conf enthält kein Passwort</span></p><p class="note">Keine pg_service.conf gefunden</p></li><li class="rule"><p class="rule-head"><code class="id">client.pgpass_location</code> <span class="rule-title">Passwortdatei liegt nicht auf einer Netzfreigabe, in einem Cloud-Ordner oder einem Roaming-Profil</span></p><p class="note">Keine Passwortdatei gefunden (/root/.pgpass)</p></li><li class="rule"><p class="rule-head"><code class="id">client.pgpass_superuser</code> <span class="rule-title">Passwortdatei enthält keinen Superuser-Eintrag für beliebige Hosts</span></p><p class="note">Keine Passwortdatei gefunden (/root/.pgpass)</p></li><li class="rule"><p class="rule-head"><code class="id">client.pgpass_loopback</code> <span class="rule-title">Passwortdatei deckt localhost, 127.0.0.1 und ::1 gleichermaßen ab</span></p><p class="note">Keine Passwortdatei gefunden (/root/.pgpass)</p></li><li class="rule"><p class="rule-head"><code class="id">client.pgpass_shadowed</code> <span class="rule-title">Passwortdatei enthält keine Zeile, die von einer früheren verdeckt wird</span></p><p class="note">Keine Passwortdatei gefunden (/root/.pgpass)</p></li><li class="rule"><p class="rule-head"><code class="id">client.cert_key_permissions</code> <span class="rule-title">Privater Client-Schlüssel ist nur für das Konto lesbar</span></p><p class="note">Kein Client-Schlüssel gefunden</p></li><li class="rule"><p class="rule-head"><code class="id">client.cert_expiry</code> <span class="rule-title">Client-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab</span></p><p class="note">Kein Client-Zertifikat gefunden</p></li></ul></section><section id="mapping-1"><h2>Zuordnung BSI IT-Grundschutz-Kompendium (Edition 2023), Baustein APP.4.3 Relationale Datenbanken</h2><p class="note">Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber, ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.</p><div class="table-wrap"><table class="stack"><thead><tr><th scope="col">Kennung</th><th scope="col">Ergebnis der Regeln</th><th scope="col">ohne Befund</th><th scope="col">Thema</th><th scope="col">Regeln</th></tr></thead><tbody><tr><td class="key"><code>APP.4.3.A3</code></td><td class="state"><span class="badge k-high">Befund</span></td><td class="num" data-label="ohne Befund">7 von 9</td><td data-label="Thema">Basishärtung des DBMS und kein Klartext für Passwörter (B)</td><td class="id" data-label="Regeln">client.service_file_password, client.pgpass_acl, client.pgpass_mode, client.pgpass_location, client.pgpass_superuser, client.pgpass_shadowed, client.pgpass_loopback, client.env_pgpassword, client.secrets_in_files, client.psql_history</td></tr><tr><td class="key"><code>APP.4.3.A16</code></td><td class="state"><span class="badge k-pass">ohne Befund</span></td><td class="num" data-label="ohne Befund">2 von 2</td><td data-label="Thema">Verschlüsselung der Datenbankanbindung (S)</td><td class="id" data-label="Regeln">client.cert_key_permissions, client.cert_expiry</td></tr><tr><td class="key"><code>APP.4.3.A18</code></td><td class="state"><span class="badge k-pass">ohne Befund</span></td><td class="num" data-label="ohne Befund">1 von 1</td><td data-label="Thema">Überwachung des Datenbankmanagementsystems (S)</td><td class="id" data-label="Regeln">client.cert_expiry</td></tr><tr><td class="key"><code>APP.4.3.A25</code></td><td class="state"><span class="badge k-high">Befund</span></td><td class="num" data-label="ohne Befund">0 von 1</td><td data-label="Thema">Sicherheitsprüfungen von Datenbanksystemen (H)</td><td class="id" data-label="Regeln">client.secrets_in_files</td></tr></tbody></table></div></section><section id="mapping-2"><h2>Zuordnung CIS PostgreSQL Benchmark (eigene Gliederung in Anlehnung an die Abschnitte 1–7) <span class="badge k-incomplete">Kennungen ungeprüft</span></h2><p class="note">Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber, ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft. Eigene Gliederung mit eigenen deutschen Kurztiteln in Anlehnung an die Abschnitte 1–7 des Benchmarks: die Nummern sind keine CIS-Kennungen, kein Originaltext. Zuordnung vor Verwendung gegen die eingesetzte Benchmark-Fassung prüfen. CIS Benchmarks ist eine Marke des Center for Internet Security; keine Verbindung, Empfehlung oder Zertifizierung durch CIS.</p><div class="table-wrap"><table class="stack"><thead><tr><th scope="col">Kennung</th><th scope="col">Ergebnis der Regeln</th><th scope="col">ohne Befund</th><th scope="col">Thema</th><th scope="col">Regeln</th></tr></thead><tbody><tr><td class="key"><code>5.2</code></td><td class="state"><span class="badge k-high">Befund</span></td><td class="num" data-label="ohne Befund">7 von 9</td><td data-label="Thema">Sichere Passwortdateien und Anmeldeumgebung auf dem Client</td><td class="id" data-label="Regeln">client.pgpass_acl, client.pgpass_mode, client.pgpass_location, client.pgpass_superuser, client.pgpass_shadowed, client.pgpass_loopback, client.service_file_password, client.env_pgpassword, client.secrets_in_files, client.psql_history</td></tr><tr><td class="key"><code>6.4</code></td><td class="state"><span class="badge k-pass">ohne Befund</span></td><td class="num" data-label="ohne Befund">2 von 2</td><td data-label="Thema">TLS-Konfiguration, Schlüsselrechte und Zertifikatslaufzeit</td><td class="id" data-label="Regeln">client.cert_key_permissions, client.cert_expiry</td></tr></tbody></table></div></section><section id="mapping-3"><h2>Zuordnung ISO/IEC 27001:2022 Annex A <span class="badge k-incomplete">Kennungen ungeprüft</span></h2><p class="note">Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber, ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft. Nur Kennungen und Kurztitel in Anlehnung an die Norm, kein Normtext. Kennungen und Titel vor Freigabe gegen die Norm prüfen.</p><div class="table-wrap"><table class="stack"><thead><tr><th scope="col">Kennung</th><th scope="col">Ergebnis der Regeln</th><th scope="col">ohne Befund</th><th scope="col">Thema</th><th scope="col">Regeln</th></tr></thead><tbody><tr><td class="key"><code>5.17</code></td><td class="state"><span class="badge k-high">Befund</span></td><td class="num" data-label="ohne Befund">7 von 9</td><td data-label="Thema">Authentisierungsinformationen</td><td class="id" data-label="Regeln">client.service_file_password, client.pgpass_acl, client.pgpass_mode, client.pgpass_location, client.pgpass_superuser, client.pgpass_shadowed, client.pgpass_loopback, client.env_pgpassword, client.secrets_in_files, client.psql_history</td></tr><tr><td class="key"><code>8.24</code></td><td class="state"><span class="badge k-pass">ohne Befund</span></td><td class="num" data-label="ohne Befund">2 von 2</td><td data-label="Thema">Verwendung von Kryptografie</td><td class="id" data-label="Regeln">client.cert_key_permissions, client.cert_expiry</td></tr></tbody></table></div></section><p class="result"><strong>Ergebnis:</strong> 1 Befund (1 hoch) · 9 ohne Befund · 0 ohne Befund, aber nicht vollständig geprüft · 1 zu sichten · 1 übersprungen · 0 Fehler</p>
+</main>
+<footer id="notices"><h2>Hinweise</h2><p><strong>Bestimmungsgemäße Verwendung:</strong> pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme bestimmt. Die Passwortprüfung liest pg_authid nur mit Superuser-Recht, rechnet eine kleine, fest umrissene Liste naheliegender Kandidaten sowie optional eine vom Betreiber bereitgestellte, auf 100 Einträge begrenzte Liste betriebsspezifischer Begriffe nach (keine Wörterbücher, kein Brute-Force), erzeugt keine Fehlanmeldungen und gibt nie ein Passwort aus — nur die Tatsache, dass eine Rolle einen Wert aus der Prüfliste verwendet. Der Client-Modus mit --user liest Dateien und Umgebungen anderer Benutzerkonten und setzt Administrator- bzw. root-Rechte und die Berechtigung voraus, diese Konten zu prüfen; gefundene Geheimnisse erscheinen nur mit Fundstelle und Zeile. Berichte können rollenbezogene und damit personenbeziehbare Befunde enthalten: vertraulich behandeln, nur zur Behebung verwenden, zeitnah löschen; wo Rollen Beschäftigten zugeordnet sind, Datenschutz und Mitbestimmung beachten. Eine Nutzung auf fremden Systemen oder Konten ohne Berechtigung ist bestimmungswidrig.</p><p>Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde fachlich bewerten, jede Änderung selbst prüfen und vor dem Einsatz in Produktion testen. Ein Lauf ohne Befund heißt nur, dass die Regeln des Katalogs nichts gefunden haben — nicht, dass die Instanz sicher ist.</p></footer>
+</body></html>

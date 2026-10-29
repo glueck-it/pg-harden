@@ -11,7 +11,7 @@ Protokollierung und die Betriebssystemseite (Dateirechte, Dienstkonto) von Postg
 ohne Composer-Abhängigkeiten (PHP 8.3 mit `pdo_pgsql` und `mbstring`). Getestet mit PostgreSQL 14 bis 18 und 19rc1 (Docker, Debian 13) sowie PostgreSQL 18 unter Windows 11
 ([tests/VERSIONSMATRIX.md](tests/VERSIONSMATRIX.md)) — die Matrix zeigt Lauffähigkeit und Versionsunterschiede, nicht die Erkennungsgüte der Regeln. Gepflegt von [Frank Glück](https://dozent.net) — Datenbankberater, Entwickler und Dozent. Impressum: <https://dozent.net/informationen/impressum>.
 
-**`check`, `plan`, `verify`, `client` und `rules` schreiben nichts auf den Server.** Jede Datenbankprüfung läuft als einzelne
+**`check`, `plan`, `client` und `rules` schreiben nichts auf den Server.** Jede Datenbankprüfung läuft als einzelne
 vorbereitete Anweisung in `BEGIN TRANSACTION READ ONLY … ROLLBACK`, mit `search_path = pg_catalog, pg_temp` und Zeitlimits.
 Hinter einem PgBouncer im Transaction-Pooling gelten Sitzungseinstellungen nicht zuverlässig — direkt verbinden. Nur
 `apply` und `rollback` schreiben, und nur mit `--execute` bzw. gegen ein Journal (siehe unten).
@@ -70,9 +70,9 @@ GRANT SELECT ON pg_hba_file_rules TO pgharden;                     -- ... und Vi
 
 ```bash
 php pg-harden.php check  --host=db1 --user=postgres                       # Bericht im Terminal
-php pg-harden.php check  --host=db1 --user=postgres --format=html --out=report.html
+php pg-harden.php check  --host=db1 --user=postgres -o audit.%y%m%d        # schreibt audit.261028.json und audit.261028.html
+php pg-harden.php check  --host=db1 --user=postgres -f audit.261021 -o audit.261028   # Vergleich: behoben, neu, weiter offen
 php pg-harden.php plan   --host=db1 --user=postgres --dir=plan-2026-10-23  # neues Verzeichnis, schreibt nur Dateien
-php pg-harden.php verify --host=db1 --user=postgres --previous=plan-2026-10-23/report.json
 php pg-harden.php client [--user=konto] [--scan=/opt/backup,/srv/compose]  # Rechner prüfen, keine Datenbankverbindung
 php pg-harden.php apply  --host=db1 --user=postgres                        # Trockenlauf: zeigt, was geschähe
 php pg-harden.php apply  --host=db1 --user=postgres --execute --dir=apply-2026-10-24 [--yes]
@@ -81,12 +81,24 @@ php pg-harden.php check  --host=db1 --user=postgres --extra-candidates=extra-can
 php pg-harden.php rules
 ```
 
-**HTML-Bericht** (`--format=html` bei `check`, `verify` und `client`): eine einzige Datei ohne externe Ressourcen und ohne Skript — die
-Gliederung des Textberichts mit einer Übersicht oben, Farbe je Schwere, Druckvorlage und Dunkelmodus. Eine Content-Security-Policy lässt
-nur das eingebettete Stylesheet zu; jeder Wert vom Server oder aus einem früheren Bericht wird maskiert.
+**Bericht und Vergleich** (`check` und `client`): ohne `-o` erscheint der Bericht als Text im Terminal. `-o NAME` (`--output`)
+schreibt `NAME.json` und `NAME.html`, das Terminal nennt dann nur die Dateien und die Zahl der Befunde. Endet der Name auf `.json`,
+`.html`, `.htm` oder `.txt`, entsteht nur diese eine Datei; jeder andere Punkt gehört zum Namen (`-o audit.261028`). `-f NAME`
+(`--file`) vergleicht mit einem früheren Bericht und liest `NAME.json` — der Name des früheren Laufs mit eingesetztem Datum
+(`-f audit.261021`, nicht `audit.%y%m%d`); vergleichbar ist nur ein Lauf, der JSON geschrieben hat. Vorhandene Dateien gleichen Namens
+werden ersetzt — ein zweiter Lauf mit `-o audit.%y%m%d` am selben Tag ersetzt den ersten (dann `%H%M` dazunehmen).
+
+Datum und Uhrzeit im Namen setzen Platzhalter wie bei `log_filename` von PostgreSQL ein: `%Y` `%y` `%m` `%d` `%H` `%M` `%S`, `%%` für ein
+Prozentzeichen — `-o audit.%y%m%d` ergibt `audit.261028.json` und `.html`. Es gilt der Beginn des Laufs (Zeitzone von PHP,
+`date.timezone`). In einer Windows-`.bat`-Datei ist jedes `%` zu verdoppeln (`-o audit.%%y%%m%%d`). Wer das Datum lieber von der Shell
+einsetzen lässt: `-o audit.$(date +%y%m%d)` (bash) bzw. `-o "audit.$(Get-Date -f yyMMdd)"` (PowerShell).
+
+Der HTML-Bericht ist eine einzige Datei ohne externe Ressourcen und ohne Skript — die Gliederung des Textberichts mit einer Übersicht
+oben, Farbe je Schwere, Druckvorlage und Dunkelmodus. Eine Content-Security-Policy lässt nur das eingebettete Stylesheet zu; jeder Wert
+vom Server oder aus einem früheren Bericht wird maskiert.
 
 **Genau sehen, was entsteht:** [examples/](examples/) enthält die echten Ausgaben aller Befehle gegen eine Beispielinstanz — Bericht (Text und
-HTML), Plan-Dateien, Probelauf, `apply` mit Journal, `verify`, `rollback`, `rules`, `client` und den Aussperrschutz, der eine Änderung an
+HTML), Plan-Dateien, Probelauf, `apply` mit Journal, Vergleich, `rollback`, `rules`, `client` und den Aussperrschutz, der eine Änderung an
 `pg_hba.conf` ablehnt.
 
 Verbindung: `--host`, `--port`, `--user`, `--dbname` (Einstieg, Standard `postgres`), `--sslmode`, `--databases=a,b`.
@@ -97,7 +109,7 @@ Ohne `--host`/`--port` gelten die libpq-Vorgaben (`PGHOST`, `PGPORT`, Socket). F
 `sslmode=require` voreingestellt; `verify-full` ist vorzuziehen.
 
 Exit-Codes: `0` keine Befunde · `1` Befunde · `3` keine Befunde, aber nicht alles geprüft (fehlende Rechte,
-Fehler, ausgelassene oder gesperrte Datenbanken; bei `verify` auch abweichender Server, Benutzer oder Umfang) ·
+Fehler, ausgelassene oder gesperrte Datenbanken; beim Vergleich mit `-f` auch abweichender Server, Benutzer oder Umfang) ·
 `2` Abbruch (auch unbekannte Optionen; bei `apply`/`rollback` ein fehlgeschlagener Lauf).
 
 Ohne Zertifikatsprüfung (`verify-full`) meldet der Bericht bei entfernten Hosts einen Hinweis.
@@ -112,7 +124,7 @@ Testumgebung prüfen.
 | `90-pg-harden.conf` | Parameter für `include_dir 'conf.d'` (am Ende von `postgresql.conf`). Warnt, wenn ein Wert von der Kommandozeile, aus `postgresql.auto.conf` oder per `ALTER DATABASE/ROLE … SET` kommt und die Datei deshalb nicht greift |
 | `harden_<db>.sql` | SQL-Korrekturen je Datenbank in einer Transaktion, je Korrektur mit Rückweg als Kommentar. Die erste Anweisung bricht ab, wenn die Datei in einer anderen Datenbank läuft. Mit der Zieldatenbank selbst verbinden und mit `psql -v ON_ERROR_STOP=1 -f <datei>` einspielen — der Plan nennt bewusst keine fertige Befehlszeile mit dem Datenbanknamen (psql liest Namen mit `=` als Verbindungsangabe) |
 | `MANUELL.md` | Befunde ohne automatische Korrektur (auch `pg_hba.conf`-Änderungen, die nur `apply` ausführt), nicht planbare Objekte, nicht vollständig geprüfte Regeln |
-| `report.json` | Ausgangsbericht für `verify` |
+| `report.json` | Ausgangsbericht zum Vergleich: `check -f plan-2026-10-23/report` |
 
 Stufen je Regel: `auto` (geringes Betriebsrisiko, aktiv im Plan), `confirm` (auskommentiert, bewusst
 freischalten), `manual` (nur in `MANUELL.md`). Objekte mit Steuer- oder Formatzeichen im Namen (auch
@@ -120,7 +132,7 @@ Bidi-Zeichen) und Korrektur-SQL mit Zeichen, die psql auswerten würde, werden n
 Das Plan-Verzeichnis muss neu oder leer sein und dem aufrufenden Benutzer gehören; Dateien werden exklusiv
 angelegt, bei einem Abbruch wird nichts Halbfertiges zurückgelassen.
 
-`verify` wertet einen früheren Befund nur dann als behoben, wenn genau diese Stelle — bei Datenbank-Befunden
+Der Vergleich (`-f`) wertet einen früheren Befund nur dann als behoben, wenn genau diese Stelle — bei Datenbank-Befunden
 genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erscheint er als „nicht vergleichbar“.
 
 ## `apply` — Plan ausführen, mit Schutz vor dem Aussperren
@@ -271,7 +283,7 @@ umask, Log-Verzeichnis auf eigenem Datenträger, freier Platz, Paketherkunft (Li
 
 ## `client` — der Rechner, von dem aus verbunden wird
 
-Keine Datenbankverbindung (`verify --previous=<client-report.json>` vergleicht auch frühere Client-Berichte). Geprüft werden für das aktuelle oder (mit `--user`, Administrator/root nötig) ein anderes Konto:
+Keine Datenbankverbindung (`client -f NAME` vergleicht mit einem früheren Client-Bericht). Geprüft werden für das aktuelle oder (mit `--user`, Administrator/root nötig) ein anderes Konto:
 `pg_service.conf` mit `password=`, Passwortdatei (Windows-ACL, Lage in Cloud-Ordnern, auf Netzfreigaben oder in
 Roaming-Profilen, Superuser-Einträge mit Platzhalter-Host, verdeckte Zeilen, fehlende Loopback-Einträge; unter Unix nur als
 Hinweis, weil libpq die Datei bei offenen Rechten ohnehin ignoriert), `psql`-Befehlshistorie (`psql_history` / `.psql_history` auf Rechte und Klartext-Passwörter), `PGPASSWORD` in Umgebung und Registry, Passwörter in
@@ -287,7 +299,7 @@ ausgelassen — Dateien in Cloud-Ordnern würden beim Lesen heruntergeladen). We
 
 ## Berichte enthalten Rollen-, Objekt- und Netznamen
 
-Rollennamen sind oft Personenkennungen, `pg_hba`-Zeilen enthalten Netze. Berichte (`--out`), Plan- und Journal-Verzeichnisse werden mit
+Rollennamen sind oft Personenkennungen, `pg_hba`-Zeilen enthalten Netze. Berichte (`-o`), Plan- und Journal-Verzeichnisse werden mit
 Dateirechten nur für das ausführende Konto (unter Windows zusätzlich `SYSTEM` und `Administratoren` per `icacls`) geschrieben. Vertraulich
 ablegen, vor einer Weitergabe an Dritte prüfen, Aufbewahrung festlegen.
 
@@ -338,8 +350,10 @@ Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
 
 ## Stand
 
-0.4.0 (unveröffentlicht): Windows-Schreibseite hält die Serververzeichnisse gegen einen Tausch gegen Junctions fest über offene Verzeichnis-Handles ohne `FILE_SHARE_DELETE` (`WindowsPin`), ACL-Lesen über das
-offene Datei-Handle (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), enge ACLs für Journale und Ausgabedateien unter Windows (beim Laden eines Journals geprüft), `verify` auch für
+0.4.0 (unveröffentlicht): **Kommandozeile neu geschnitten** — `-o NAME` schreibt JSON und HTML, `-f NAME` vergleicht mit einem früheren
+Bericht, Platzhalter wie `log_filename` für das Datum; `--format`, `--out`, `--previous` und der Befehl `verify` entfallen
+(`verify` ist jetzt `check -f`). Windows-Schreibseite hält die Serververzeichnisse gegen einen Tausch gegen Junctions fest über offene Verzeichnis-Handles ohne `FILE_SHARE_DELETE` (`WindowsPin`), ACL-Lesen über das
+offene Datei-Handle (`GetSecurityInfo`/`GetFinalPathNameByHandleW`), enge ACLs für Journale und Ausgabedateien unter Windows (beim Laden eines Journals geprüft), Vergleich auch für
 Client-Berichte, Regelkatalog auf 86 Regeln erweitert (74 für `check`, 12 für `client`), Zuordnungen zu BSI IT-Grundschutz `APP.4.3`
 (Kennungen gegen das BSI-Original geprüft) und, vorläufig, zum CIS PostgreSQL Benchmark ergänzt. Einzelheiten in [CHANGELOG.md](CHANGELOG.md) (englisch).
 

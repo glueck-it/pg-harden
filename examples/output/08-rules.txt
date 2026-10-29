@@ -10,45 +10,56 @@ client.env_pgpassword           hoch     manual   PGPASSWORD ist nicht in der Um
 client.secrets_in_files         hoch     manual   Profile, Skripte, Compose-Dateien, Cron und Dienstdateien enthalten keine Klartext-Passwörter
 client.cert_key_permissions     hoch     manual   Privater Client-Schlüssel ist nur für das Konto lesbar
 client.cert_expiry              mittel   manual   Client-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab
+client.psql_history             hoch     manual   psql-Befehlshistorie ist nur für das Konto lesbar und enthält keine Passwörter
 patch.supported_major           hoch     manual   Hauptversion hat laut Katalogstand noch Support
 patch.catalog_current           niedrig  manual   Support-Tabelle des Katalogs kennt die laufende Hauptversion
 conf.role_db_overrides          mittel   manual   Sicherheitsparameter sind nicht je Rolle oder Datenbank abgeschwächt
 net.listen_addresses            niedrig  manual   Server lauscht nicht auf allen Netzwerkschnittstellen
 tls.ssl_enabled                 hoch     manual   TLS ist eingeschaltet
 tls.min_protocol                mittel   confirm  Mindestversion TLS 1.2
+tls.ciphers                     mittel   manual   Keine schwachen TLS-Chiffren und Server-Präferenz aktiv
 hba.errors                      hoch     manual   pg_hba.conf enthält keine fehlerhaften Zeilen
 hba.host_without_tls            mittel   confirm  Netzwerkzugänge in pg_hba.conf verlangen TLS
 auth.password_encryption        hoch     auto     Neue Passwörter werden als SCRAM-SHA-256 gespeichert
 auth.md5_passwords              hoch     manual   Keine Rolle hat noch ein MD5-Passwort
+auth.passwordless_or_expired    mittel   manual   Anmeldefähige Rollen haben ein gültiges Passwort hinterlegt
 auth.weak_passwords             hoch     manual   Kein Passwort einer anmeldefähigen Rolle stammt aus der Prüfliste (naheliegende Werte, optional Betreiberbegriffe)
 hba.trust                       hoch     confirm  Keine Anmeldung ohne Passwort (trust)
 hba.cleartext_password          hoch     confirm  Kein Passwort im Klartext (Methode password)
 hba.md5_method                  mittel   confirm  pg_hba.conf nutzt scram-sha-256 statt md5
 hba.open_to_all                 hoch     manual   Kein Netzwerkzugang für alle Adressen
 hba.superuser_remote            mittel   manual   Superuser können sich nicht über das Netz anmelden
+hba.weak_options                mittel   manual   Keine ident-Anmeldung über das Netz und kein clientcert=verify-ca ohne Namensabgleich
 auth.authentication_timeout     niedrig  auto     Anmeldevorgang ist zeitlich begrenzt (höchstens 60 Sekunden)
 auth.auth_delay                 niedrig  manual   Bremse nach Fehlanmeldung (auth_delay) geladen
 auth.password_policy            niedrig  manual   Passwortrichtlinie aktiv (passwordcheck oder credcheck)
 roles.extra_superusers          mittel   manual   Keine weiteren Superuser mit Anmelderecht
-roles.server_file_access        hoch     manual   Kein Nicht-Superuser hat Zugriff auf Serverdateien oder -programme
+roles.server_file_access        hoch     manual   Kein Nicht-Superuser hat Zugriff auf Serverdateien, -programme oder alle Tabellen
+roles.replication_login         niedrig  manual   REPLICATION-Recht nur für dedizierte Replikations- und Sicherungsrollen
 roles.bypassrls                 mittel   manual   Row-Level Security umgehen nur Superuser
 roles.createrole                niedrig  manual   CREATEROLE nur für ausgewiesene Verwaltungsrollen
+roles.createrole_self_grant     niedrig  confirm  CREATEROLE-Rollen vergeben sich neue Rollen nicht automatisch mit INHERIT/SET
 roles.allow_alter_system        niedrig  confirm  ALTER SYSTEM ist gesperrt
 db.public_schema_create         hoch     confirm  Niemand kann im Schema public ohne Freigabe Objekte anlegen
 db.public_temp                  niedrig  confirm  Temporäre Tabellen nur für berechtigte Rollen
 db.public_connect               mittel   confirm  Nur berechtigte Rollen dürfen sich mit einer Datenbank verbinden (PUBLIC ohne CONNECT)
 db.catalog_visibility           niedrig  confirm  Datenbank- und Rollennamen sind nicht für alle Rollen lesbar
+db.default_acl_public           mittel   manual   Keine CREATE-Rechte auf Fachschemata und keine Standardrechte (ALTER DEFAULT PRIVILEGES) für PUBLIC
+db.rls_policies_inactive        hoch     manual   Tabellen mit Row-Level-Security-Policies haben RLS eingeschaltet
 code.secdef_search_path         hoch     confirm  SECURITY DEFINER-Funktionen haben einen festen search_path
 code.untrusted_languages        mittel   manual   Keine untrusted Sprachen installiert
 code.lo_compat_privileges       mittel   confirm  Large Objects unterliegen der Rechteprüfung
 code.extensions                 Info     manual   Installierte Extensions (Bestandsliste)
 code.preload_libraries          Info     manual   Vorab geladene Bibliotheken (Bestandsliste)
+code.fdw_secrets                hoch     manual   Keine USER MAPPING FOR PUBLIC und keine Klartext-Passwörter in Foreign-Data-Wrappern oder Subscriptions
+code.event_triggers             Info     manual   Installierte Event-Trigger (Bestandsliste)
 log.collector                   mittel   confirm  Protokolle werden in Dateien oder an syslog geschrieben
 log.connections                 mittel   auto     Anmeldungen werden protokolliert
 log.disconnections              niedrig  auto     Sitzungsende wird protokolliert
 log.line_prefix                 mittel   confirm  Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle
 log.statement_ddl               niedrig  confirm  Strukturänderungen werden protokolliert
-log.pgaudit                     mittel   manual   pgAudit ist geladen
+log.pgaudit                     mittel   manual   pgAudit ist geladen und eingerichtet
+log.lock_waits                  niedrig  confirm  Lange Sperrwartezeiten werden protokolliert
 log.parameter_length            niedrig  confirm  Parameterwerte werden nicht vollständig protokolliert
 log.debug_print                 niedrig  auto     Debug-Ausgaben von Parser und Planer sind aus
 log.file_mode                   niedrig  confirm  Protokolldateien sind nur für das Dienstkonto lesbar
@@ -60,16 +71,19 @@ avail.archive_enabled           mittel   manual   WAL-Archivierung ist eingescha
 avail.archiver_failing          hoch     manual   WAL-Archivierung läuft fehlerfrei (wenn eingeschaltet)
 sess.idle_in_transaction        niedrig  manual   Offen hängende Transaktionen werden beendet
 data.checksums                  mittel   manual   Datenprüfsummen sind eingeschaltet
+data.crash_safety               hoch     confirm  Absturzsicherheit und Prüfsummentreue sind nicht abgeschaltet (fsync, full_page_writes)
 os.pgdata_permissions           hoch     manual   Datenverzeichnis ist nur für das Dienstkonto zugänglich
 os.config_permissions           hoch     manual   Konfigurationsdateien sind vor Änderung und (pg_hba.conf) Einsicht geschützt
 os.ssl_key_permissions          hoch     manual   Privater TLS-Schlüssel ist nur für das Dienstkonto lesbar
+os.ssl_cert_expiry              mittel   manual   Server- und CA-Zertifikate sind gültig und laufen nicht in den nächsten 30 Tagen ab
+os.tablespace_permissions       hoch     manual   Verzeichnisse benutzerdefinierter Tablespaces sind nur für das Dienstkonto zugänglich
 os.log_permissions              mittel   manual   Protokolldateien sind nicht für alle Benutzer des Systems lesbar
 os.socket_permissions           niedrig  manual   Unix-Socket-Verzeichnis ist nicht für alle beschreibbar, Socket nicht für alle erreichbar
 os.umask                        niedrig  manual   Serverprozess legt neue Dateien nicht für alle lesbar an (umask)
 os.service_account              mittel   manual   Dienst läuft unter einem eigenen, nicht privilegierten Konto
-os.service_unit                 mittel   manual   Dienstdatei und Prozessumgebung enthalten keine Klartext-Geheimnisse
+os.service_unit                 mittel   manual   Dienstkonfiguration und Prozessumgebung sind geschützt und enthalten keine Klartext-Geheimnisse
 os.log_own_volume               niedrig  manual   Protokolle liegen nicht auf dem Datenträger der Daten oder des WAL
 os.disk_free                    mittel   manual   Datenträger von Daten, WAL und Protokollen haben ausreichend freien Platz
 os.package_source               niedrig  manual   Serverprogramm stammt aus der Paketverwaltung (Linux) bzw. ist unverändert (Windows)
 
-72 Regeln · Katalog client 2026.10, postgresql 2026.10, system 2026.10
+86 Regeln · Katalog client 2026.10, postgresql 2026.10, system 2026.10

@@ -31,7 +31,7 @@ run() { docker exec "$NAME" sh -c "cd /opt/pg-harden && $1" || true; }
 H="--host=127.0.0.1 --user=postgres"
 
 run "php pg-harden.php check $H" > "$OUT/01-check.txt"
-run "php pg-harden.php check $H --format=html" > "$OUT/01-check.html"
+run "mkdir -p /root/out && php pg-harden.php check $H -o /root/out/01-check.html" > /dev/null
 run "php pg-harden.php plan $H --dir=/root/plan" > "$OUT/02-plan.txt"
 docker cp "$NAME:/root/plan" "$OUTD/02-plan"
 run "php pg-harden.php apply $H --include-confirm=db.public_schema_create,code.secdef_search_path" > "$OUT/03-apply-dry-run.txt"
@@ -39,8 +39,8 @@ run "php pg-harden.php apply $H --include-confirm=db.public_schema_create,code.s
 docker cp "$NAME:/root/journal/apply-log.json" "$OUTD/04-apply-log.json"
 run "ls -la /root/journal /root/journal/backup" > "$OUT/04-journal-files.txt"
 run "cat \$(psql -U postgres -Atc 'show data_directory')/conf.d/90-pg-harden.conf" > "$OUT/04-written-90-pg-harden.conf"
-run "php pg-harden.php verify $H --previous=/root/plan/report.json" > "$OUT/05-verify.txt"
-run "php pg-harden.php verify $H --previous=/root/plan/report.json --format=html" > "$OUT/05-verify.html"
+run "php pg-harden.php check $H -f /root/plan/report" > "$OUT/05-compare.txt"
+run "php pg-harden.php check $H -f /root/plan/report -o /root/out/05-compare.html" > /dev/null
 run "php pg-harden.php rollback $H --dir=/root/journal" > "$OUT/06-rollback.txt"
 # Lockout protection: pg_hba.conf trust -> scram-sha-256 is refused while login roles have no SCRAM password
 run "sha256sum \$(psql -U postgres -Atc 'show hba_file')" > "$OUT/07-pg_hba-checksum-before.txt"
@@ -48,5 +48,6 @@ run "php pg-harden.php apply $H --rules=hba.trust --include-confirm=hba.trust --
 run "sha256sum \$(psql -U postgres -Atc 'show hba_file')" > "$OUT/07-pg_hba-checksum-after.txt"
 run "php pg-harden.php rules" > "$OUT/08-rules.txt"
 run "php pg-harden.php client" > "$OUT/09-client.txt"
-run "php pg-harden.php client --format=html" > "$OUT/09-client.html"
+run "php pg-harden.php client -o /root/out/09-client.html" > /dev/null
+for f in 01-check.html 05-compare.html 09-client.html; do docker cp "$NAME:/root/out/$f" "$OUTD/$f"; done
 echo "Ausgaben in $OUT"

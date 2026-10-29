@@ -1,12 +1,12 @@
-pg-harden 0.3.2 · Prüfbericht · 26.10.2026 16:10 (+00:00)
+pg-harden 0.4.0 · Prüfbericht · 29.10.2026 13:50 (+00:00)
 Server        127.0.0.1:5432 · PostgreSQL 18.6 (Debian 18.6-1.pgdg13+2) · Benutzer postgres (Superuser) · ohne
               TLS
 Umfang        Datenbanken postgres, shop, template1 · Betriebssystem-Regeln geprüft
 Katalog       client 2026.10, postgresql 2026.10, system 2026.10 · Hinweise zu Verwendung und Gewähr am Ende
 
 ZUSAMMENFASSUNG
-  28 Befunde    7 hoch · 11 mittel · 10 niedrig
-  29 ohne Befund · 2 ohne Befund, aber nicht vollständig geprüft · 2 zu sichten · 0 übersprungen · 0 Fehler
+  29 Befunde    7 hoch · 11 mittel · 11 niedrig
+  40 ohne Befund · 2 ohne Befund, aber nicht vollständig geprüft · 3 zu sichten · 0 übersprungen · 0 Fehler
 
 BEFUNDE — HOCH (7)
   tls.ssl_enabled               TLS ist eingeschaltet
@@ -51,7 +51,7 @@ BEFUNDE — MITTEL (11)
                                 - log_connections: aus
   log.line_prefix               Protokollzeilen enthalten Zeit, Benutzer, Datenbank und Quelle
                                 - log_line_prefix: %m [%p] 
-  log.pgaudit                   pgAudit ist geladen
+  log.pgaudit                   pgAudit ist geladen und eingerichtet
                                 - shared_preload_libraries: pgaudit nicht geladen
   avail.archive_enabled         WAL-Archivierung ist eingeschaltet
                                 - archive_mode: ist 'off', erwartet eines von: on, always
@@ -60,7 +60,7 @@ BEFUNDE — MITTEL (11)
   data.checksums                Datenprüfsummen sind eingeschaltet
                                 - data_checksums: ist 'off', erwartet 'on'
 
-BEFUNDE — NIEDRIG (10)
+BEFUNDE — NIEDRIG (11)
   auth.auth_delay               Bremse nach Fehlanmeldung (auth_delay) geladen
                                 - auth_delay: auth_delay nicht geladen
   auth.password_policy          Passwortrichtlinie aktiv (passwordcheck oder credcheck)
@@ -82,6 +82,8 @@ BEFUNDE — NIEDRIG (10)
                                 - allow_alter_system: ist 'on', erwartet 'off'
   log.disconnections            Sitzungsende wird protokolliert
                                 - log_disconnections: ist 'off', erwartet 'on'
+  log.lock_waits                Lange Sperrwartezeiten werden protokolliert
+                                - log_lock_waits: ist 'off', erwartet 'on'
   log.parameter_length          Parameterwerte werden nicht vollständig protokolliert
                                 - log_parameter_max_length: ist '-1', erwartet nicht '-1'
   log.statement_ddl             Strukturänderungen werden protokolliert
@@ -93,12 +95,14 @@ BEFUNDE — NIEDRIG (10)
                                 - unix_socket_permissions: ist 0777 — jeder Benutzer des Systems kann den
                                   Socket erreichen; die Anmeldung schützt dann allein pg_hba.conf (peer)
 
-ZU SICHTEN (2)
+ZU SICHTEN (3)
+  code.event_triggers           Installierte Event-Trigger (Bestandsliste)
   code.extensions               Installierte Extensions (Bestandsliste)
   code.preload_libraries        Vorab geladene Bibliotheken (Bestandsliste)
 
 OHNE BEFUND, ABER NICHT VOLLSTÄNDIG GEPRÜFT (2)
-  os.service_unit               Dienstdatei und Prozessumgebung enthalten keine Klartext-Geheimnisse
+  os.service_unit               Dienstkonfiguration und Prozessumgebung sind geschützt und enthalten keine
+                                Klartext-Geheimnisse
                                 → nicht geprüft: Umgebung des Serverprozesses nicht lesbar (/proc/1/environ —
                                   root bzw. Dienstkonto nötig)
                                 → Kein systemd-Dienst ermittelt — Dienstdatei nicht geprüft
@@ -107,20 +111,32 @@ OHNE BEFUND, ABER NICHT VOLLSTÄNDIG GEPRÜFT (2)
                                 → nicht geprüft: Programmdatei des Serverprozesses nicht ermittelbar
                                   (/proc/1/exe — root nötig)
 
-OHNE BEFUND (29)
+OHNE BEFUND (40)
   patch.supported_major         Hauptversion hat laut Katalogstand noch Support
   patch.catalog_current         Support-Tabelle des Katalogs kennt die laufende Hauptversion
   conf.role_db_overrides        Sicherheitsparameter sind nicht je Rolle oder Datenbank abgeschwächt
   hba.errors                    pg_hba.conf enthält keine fehlerhaften Zeilen
+  tls.ciphers                   Keine schwachen TLS-Chiffren und Server-Präferenz aktiv
   tls.min_protocol              Mindestversion TLS 1.2
   net.listen_addresses          Server lauscht nicht auf allen Netzwerkschnittstellen
   auth.password_encryption      Neue Passwörter werden als SCRAM-SHA-256 gespeichert
   hba.cleartext_password        Kein Passwort im Klartext (Methode password)
+  auth.passwordless_or_expired  Anmeldefähige Rollen haben ein gültiges Passwort hinterlegt
   hba.md5_method                pg_hba.conf nutzt scram-sha-256 statt md5
+  hba.weak_options              Keine ident-Anmeldung über das Netz und kein clientcert=verify-ca ohne
+                                Namensabgleich
   auth.authentication_timeout   Anmeldevorgang ist zeitlich begrenzt (höchstens 60 Sekunden)
-  roles.server_file_access      Kein Nicht-Superuser hat Zugriff auf Serverdateien oder -programme
+  db.rls_policies_inactive      Tabellen mit Row-Level-Security-Policies haben RLS eingeschaltet
+  roles.server_file_access      Kein Nicht-Superuser hat Zugriff auf Serverdateien, -programme oder alle
+                                Tabellen
+  db.default_acl_public         Keine CREATE-Rechte auf Fachschemata und keine Standardrechte (ALTER DEFAULT
+                                PRIVILEGES) für PUBLIC
   roles.extra_superusers        Keine weiteren Superuser mit Anmelderecht
   roles.createrole              CREATEROLE nur für ausgewiesene Verwaltungsrollen
+  roles.createrole_self_grant   CREATEROLE-Rollen vergeben sich neue Rollen nicht automatisch mit INHERIT/SET
+  roles.replication_login       REPLICATION-Recht nur für dedizierte Replikations- und Sicherungsrollen
+  code.fdw_secrets              Keine USER MAPPING FOR PUBLIC und keine Klartext-Passwörter in
+                                Foreign-Data-Wrappern oder Subscriptions
   code.lo_compat_privileges     Large Objects unterliegen der Rechteprüfung
   code.untrusted_languages      Keine untrusted Sprachen installiert
   log.debug_print               Debug-Ausgaben von Parser und Planer sind aus
@@ -129,42 +145,102 @@ OHNE BEFUND (29)
   avail.archiver_failing        WAL-Archivierung läuft fehlerfrei (wenn eingeschaltet)
   avail.inactive_slots          Keine inaktiven Replikations-Slots
   avail.slot_wal_keep           Replikations-Slots können das WAL nicht unbegrenzt festhalten
+  data.crash_safety             Absturzsicherheit und Prüfsummentreue sind nicht abgeschaltet (fsync,
+                                full_page_writes)
   os.config_permissions         Konfigurationsdateien sind vor Änderung und (pg_hba.conf) Einsicht geschützt
   os.pgdata_permissions         Datenverzeichnis ist nur für das Dienstkonto zugänglich
   os.ssl_key_permissions        Privater TLS-Schlüssel ist nur für das Dienstkonto lesbar
                                 → TLS ist nicht eingeschaltet — nichts zu prüfen
+  os.tablespace_permissions     Verzeichnisse benutzerdefinierter Tablespaces sind nur für das Dienstkonto
+                                zugänglich
+                                → Keine benutzerdefinierten Tablespaces angelegt
   os.disk_free                  Datenträger von Daten, WAL und Protokollen haben ausreichend freien Platz
-                                → Datenverzeichnis: 85 % frei (854.1 GiB)
+                                → Datenverzeichnis: 84 % frei (850.3 GiB)
   os.log_permissions            Protokolldateien sind nicht für alle Benutzer des Systems lesbar
                                 → Der Logging-Collector ist aus — Protokolle gehen an syslog/journald oder
                                   stderr des Dienstes
   os.service_account            Dienst läuft unter einem eigenen, nicht privilegierten Konto
                                 → Dienstkonto: postgres
+  os.ssl_cert_expiry            Server- und CA-Zertifikate sind gültig und laufen nicht in den nächsten 30
+                                Tagen ab
+                                → TLS ist nicht eingeschaltet — nichts zu prüfen
   os.log_own_volume             Protokolle liegen nicht auf dem Datenträger der Daten oder des WAL
                                 → Der Logging-Collector ist aus — kein Log-Verzeichnis
   os.umask                      Serverprozess legt neue Dateien nicht für alle lesbar an (umask)
+
+ZUORDNUNG BSI IT-GRUNDSCHUTZ-KOMPENDIUM (EDITION 2023), BAUSTEIN APP.4.3 RELATIONALE DATENBANKEN
+  Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber,
+  ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
+
+  Kennung  Ergebnis der Regeln         ohne Befund  Thema
+  APP.4.3.A1Befund                      7 von 12     Sicherheitsrichtlinie für Datenbanksysteme (B)
+  APP.4.3.A3Befund                      16 von 28    Basishärtung des DBMS und kein Klartext für Passwörter (B)
+  APP.4.3.A4Befund                      1 von 5      Geregeltes Anlegen neuer Datenbanken (B)
+  APP.4.3.A9Befund                      2 von 4      Datensicherung eines Datenbanksystems (B)
+  APP.4.3.A11Befund                      5 von 7      Ausreichende Dimensionierung der Hardware (S)
+  APP.4.3.A12Befund                      4 von 5      Einheitlicher Konfigurationsstandard von DBMS (S)
+  APP.4.3.A13Sichtung nötig              1 von 2      Restriktive Handhabung von Datenbank-Links (S)
+  APP.4.3.A16Befund                      4 von 6      Verschlüsselung der Datenbankanbindung (S)
+  APP.4.3.A17Befund                      1 von 2      Datenübernahme oder Migration (S)
+  APP.4.3.A18Befund                      4 von 6      Überwachung des Datenbankmanagementsystems (S)
+  APP.4.3.A19Befund                      2 von 5      Schutz vor schädlichen Datenbank-Skripten (S)
+  APP.4.3.A20Befund                      6 von 17     Regelmäßige Audits und Protokollauswertung (S)
+  APP.4.3.A21Befund                      0 von 3      Einsatz von Datenbank-Sicherheitswerkzeugen (H)
+  APP.4.3.A22Befund                      2 von 4      Notfallvorsorge (H)
+  APP.4.3.A23Befund                      1 von 3      Archivierung (H)
+  APP.4.3.A24Sichtung nötig              2 von 3      Datenverschlüsselung in der Datenbank (H)
+  APP.4.3.A25nicht vollständig geprüft   4 von 6      Sicherheitsprüfungen von Datenbanksystemen (H)
+
+ZUORDNUNG CIS POSTGRESQL BENCHMARK (EIGENE GLIEDERUNG IN ANLEHNUNG AN DIE ABSCHNITTE 1–7) — Kennungen ungeprüft
+  Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber,
+  ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
+
+  Kennung  Ergebnis der Regeln         ohne Befund  Thema
+  1.1      nicht vollständig geprüft   0 von 1      Bezug aus vertrauenswürdiger Paketquelle
+  1.2      nicht vollständig geprüft   1 von 2      Dedizierter Systemdienst und Dienstkonto
+  1.3      Befund                      0 von 1      Datencluster mit Datenprüfsummen initialisiert
+  1.4      ohne Befund                 2 von 2      Unterstützte Haupt- und Nebenversion im Einsatz
+  2.1      ohne Befund                 4 von 4      Dateierstellungsmaske (umask) und Verzeichnisrechte des Dienstes
+  2.2      Befund                      0 von 1      Zugriffsrechte auf Unix-Domain-Sockets
+  3.1      Befund                      4 von 5      Protokollsammler, Zielverzeichnis und Dateimodus
+  3.2      Befund                      0 von 3      Protokollierung von Verbindungen, Trennungen und Sitzungspräfix
+  3.3      Befund                      0 von 3      Protokollierung von Schemaänderungen, Sperr-Wartezeiten und Parametern
+  3.4      ohne Befund                 1 von 1      Keine Debug-Ausgaben von internen Strukturen im Serverprotokoll
+  3.5      Befund                      0 von 1      Erweiterte Audit-Protokollierung (pgaudit)
+  4.1      Befund                      5 von 6      Begrenzung von Superuser-, System- und Rollenverwaltungsrechten
+  4.2      Befund                      1 von 3      Passwortlebensdauer, Passwortstärke und Passwortrichtlinie
+  4.3      Befund                      1 von 5      Einschränkung der Rechte von PUBLIC auf Datenbanken und Schemas
+  4.4      Befund                      1 von 3      Zeilensicherheit (RLS) und sichere SECURITY-DEFINER-Funktionen
+  5.1      Befund                      4 von 7      Anmeldung über lokalen Socket und Netzwerk (pg_hba.conf)
+  6.1      Befund                      2 von 4      Lauschadressen und Verbindungszeitgrenzen
+  6.2      Befund                      3 von 5      Backend-Parameter, Laufzeit-Overrides und ALTER SYSTEM
+  6.3      Sichtung nötig              2 von 5      Vorab geladene Bibliotheken, Erweiterungen, Sprachen und Trigger
+  6.4      Befund                      4 von 6      TLS-Konfiguration, Schlüsselrechte und Zertifikatslaufzeit
+  6.5      Befund                      1 von 2      Kryptografische Passwortspeicherung (SCRAM-SHA-256)
+  7.1      Befund                      4 von 5      Replikationskonten, WAL-Archivierung und Replikations-Slots
+  7.2      ohne Befund                 1 von 1      Geheimnisschutz bei Foreign Data Wrappern und logischer Replikation
 
 ZUORDNUNG ISO/IEC 27001:2022 ANNEX A — Kennungen ungeprüft
   Die Zuordnung zeigt nur das Ergebnis der aufgeführten technischen Prüfregeln. Sie ist keine Aussage darüber,
   ob die Anforderung der Norm erfüllt ist; organisatorische und weitere technische Anteile sind nicht geprüft.
 
   Kennung  Ergebnis der Regeln         ohne Befund  Thema
-  5.15     Befund                      1 von 8      Zugangssteuerung
-  5.17     Befund                      1 von 4      Authentisierungsinformationen
-  8.2      Befund                      5 von 7      Privilegierte Zugriffsrechte
-  8.3      Befund                      5 von 8      Einschränkung des Informationszugangs
-  8.5      Befund                      4 von 8      Sichere Authentisierung
+  5.15     Befund                      4 von 11     Zugangssteuerung
+  5.17     Befund                      3 von 6      Authentisierungsinformationen
+  8.2      Befund                      7 von 9      Privilegierte Zugriffsrechte
+  8.3      Befund                      8 von 11     Einschränkung des Informationszugangs
+  8.5      Befund                      6 von 10     Sichere Authentisierung
   8.6      Befund                      5 von 7      Kapazitätssteuerung
   8.8      nicht vollständig geprüft   2 von 3      Handhabung technischer Schwachstellen
-  8.9      Befund                      3 von 7      Konfigurationsmanagement
-  8.13     Befund                      1 von 2      Sicherung von Information
-  8.15     Befund                      3 von 10     Protokollierung
+  8.9      Befund                      4 von 9      Konfigurationsmanagement
+  8.13     Befund                      2 von 4      Sicherung von Information
+  8.15     Befund                      3 von 11     Protokollierung
   8.20     Befund                      1 von 4      Netzwerksicherheit
-  8.24     Befund                      3 von 5      Verwendung von Kryptografie
-  8.28     Befund                      0 von 1      Sichere Programmierung
+  8.24     Befund                      5 von 7      Verwendung von Kryptografie
+  8.28     Befund                      0 von 2      Sichere Programmierung
 
-Ergebnis: 28 Befunde (7 hoch · 11 mittel · 10 niedrig) · 29 ohne Befund · 2 ohne Befund, aber nicht
-  vollständig geprüft · 2 zu sichten · 0 übersprungen · 0 Fehler
+Ergebnis: 29 Befunde (7 hoch · 11 mittel · 11 niedrig) · 40 ohne Befund · 2 ohne Befund, aber nicht
+  vollständig geprüft · 3 zu sichten · 0 übersprungen · 0 Fehler
 
 ── Hinweise ──────────────────────────────────────────────────────────────────────────────────────────────────
 Bestimmungsgemäße Verwendung: pg-harden ist zur Härtung eigener oder ausdrücklich beauftragter Systeme

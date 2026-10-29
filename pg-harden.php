@@ -7,7 +7,7 @@ declare(strict_types=1);
  * Checks a PostgreSQL instance against a data-driven rule catalog, writes a change plan
  * and compares before/after reports.
  *
- * check/plan/verify/client write nothing to the server by design (apply/rollback are the only writers, see
+ * check/plan/client write nothing to the server by design (apply/rollback are the only writers, see
  * src/Apply.php): every check runs inside its own
  * BEGIN TRANSACTION READ ONLY … ROLLBACK, as a single server-side prepared statement
  * (no multi-statement SQL), with search_path = pg_catalog, pg_temp. The rule catalog is
@@ -15,10 +15,9 @@ declare(strict_types=1);
  * Behind a transaction-pooling PgBouncer session settings are not reliable — connect directly.
  *
  * usage:
- *   php pg-harden.php client [--user=ACCOUNT] [--scan=DIR,DIR] [--format=text|json|html] [--out=FILE]
- *   php pg-harden.php check  [connection] [--format=text|json|html] [--out=FILE]
+ *   php pg-harden.php check  [connection] [-f PREVIOUS] [-o NAME]
+ *   php pg-harden.php client [--user=ACCOUNT] [--scan=DIR,DIR] [-f PREVIOUS] [-o NAME]
  *   php pg-harden.php plan   [connection] --dir=NEW_OR_EMPTY_DIR
- *   php pg-harden.php verify [connection] --previous=report.json [--format=...] [--out=FILE]
  *   php pg-harden.php apply  [connection] [--rules=ID,..] [--include-confirm=ID,..] [--execute --dir=NEW_DIR [--yes]]
  *   php pg-harden.php rollback [connection] --dir=APPLY_JOURNAL_DIR
  *   php pg-harden.php rules
@@ -28,6 +27,10 @@ declare(strict_types=1);
  *             psql-style as well: -h HOST -p PORT -U USER -d DBNAME, --username; long forms --host=db1 or --host db1,
  *             short forms -h db1 or -hdb1 (no "="). -U/--username always mean the database user (client: --user=ACCOUNT).
  *             Help: --help or -?
+ * report:     without -o the text report goes to the terminal. -o NAME writes NAME.json and NAME.html; a name ending in .json,
+ *             .html, .htm or .txt is that one file (any other dot belongs to the name: -o audit.261028). Placeholders as in
+ *             log_filename: %Y %y %m %d %H %M %S, %% for a percent sign (-o audit.%y%m%d).
+ *             -f NAME compares with an earlier report: reads NAME.json (or NAME if it ends in .json).
  *             Unset host/port fall back to libpq (PGHOST, PGPORT, socket). Remote hosts default
  *             to sslmode=require.
  * password:   never on the command line; libpq reads PGPASSWORD or the pgpass file.
@@ -167,12 +170,12 @@ final class Text
     return $quote === null && $semicolons === 1;
   }
 
-  /** $ascii = true for stdout: escapes every non-ASCII character, so no control sequence reaches a terminal. */
-  public static function json(mixed $data, bool $ascii = false): string
+  /** JSON goes to files only (reports, plans, journals): the terminal gets text, so no control sequence reaches it. */
+  public static function json(mixed $data): string
   {
-    $flags = JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR;
+    $flags = JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR;
     try {
-      return json_encode($data, $ascii ? $flags : $flags | JSON_UNESCAPED_UNICODE) . "\n";
+      return json_encode($data, $flags) . "\n";
     } catch (JsonException $e) {
       throw new HardenException('JSON-Ausgabe fehlgeschlagen: ' . $e->getMessage());
     }
@@ -251,12 +254,64 @@ final class Files
   }
 }
 
+/**
+ * Names given to -o (output) and -f (earlier report). Only .json, .html, .htm and .txt at the end choose a format; every other dot
+ * belongs to the name (-o audit.261028 writes audit.261028.json and audit.261028.html). -o takes placeholders as log_filename in
+ * PostgreSQL, a small strftime subset — no separate switch for a time stamp.
+ */
+final class ReportName
+{
+  private const FORMATS = ['json' => 'json', 'html' => 'html', 'htm' => 'html', 'txt' => 'text'];
+  /** strftime placeholder => DateTimeInterface::format */
+  private const PLACEHOLDERS = ['Y' => 'Y', 'y' => 'y', 'm' => 'm', 'd' => 'd', 'H' => 'H', 'M' => 'i', 'S' => 's'];
+
+  /**
+   * The files -o NAME writes, placeholders filled from $at. A name without a format ending is a stem for .json and .html.
+   *
+   * @return array<string, string> file => json|html|text
+   */
+  public static function outputs(string $name, DateTimeInterface $at): array
+  {
+    $name = (string) preg_replace_callback('/%(.?)/s', fn(array $m): string => $m[1] === '%' ? '%'
+      : $at->format(self::PLACEHOLDERS[$m[1]] ?? throw new HardenException('-o: unbekannter Platzhalter %' . Text::printable($m[1])
+        . ' (möglich sind %Y %y %m %d %H %M %S, %% für ein Prozentzeichen).')), $name);
+    if (preg_match('~[/\\\\]$~', $name) === 1) {
+      throw new HardenException('-o braucht einen Dateinamen, kein Verzeichnis: ' . Text::printable($name));
+    }
+    $format = self::format($name);
+    // -o .json or -o . would write a hidden file ".json" or "..json": a name needs more than dots in front of its ending.
+    if (trim(pathinfo($name, $format !== null ? PATHINFO_FILENAME : PATHINFO_BASENAME), '.') === '') {
+      throw new HardenException('-o braucht einen Namen vor der Endung: ' . Text::printable($name));
+    }
+    return $format !== null ? [$name => $format] : [$name . '.json' => 'json', $name . '.html' => 'html'];
+  }
+
+  /** The file -f NAME reads: NAME.json, or NAME itself if it ends in .json. HTML and text cannot be compared. */
+  public static function previous(string $name): string
+  {
+    $format = self::format($name);
+    if ($format === null) {
+      return $name . '.json';
+    }
+    if ($format !== 'json') {
+      throw new HardenException('-f vergleicht mit dem JSON-Bericht, nicht mit ' . Text::printable($name)
+        . ' — den Namen ohne Endung oder mit .json angeben.');
+    }
+    return $name;
+  }
+
+  private static function format(string $name): ?string
+  {
+    return self::FORMATS[strtolower(pathinfo($name, PATHINFO_EXTENSION))] ?? null;
+  }
+}
+
 final class Options
 {
-  private const VALUED = ['host', 'port', 'user', 'dbname', 'sslmode', 'databases', 'format', 'out', 'dir', 'previous', 'scan', 'rules', 'include-confirm', 'extra-candidates'];
+  private const VALUED = ['host', 'port', 'user', 'dbname', 'sslmode', 'databases', 'output', 'file', 'dir', 'scan', 'rules', 'include-confirm', 'extra-candidates'];
   private const FLAGS = ['help', 'execute', 'yes'];
   /** Short options as psql spells them, in addition to the long names. -h is the host as in psql; help is --help or -?. */
-  private const SHORT = ['h' => 'host', 'p' => 'port', 'U' => 'user', 'd' => 'dbname', '?' => 'help'];
+  private const SHORT = ['h' => 'host', 'p' => 'port', 'U' => 'user', 'd' => 'dbname', 'o' => 'output', 'f' => 'file', '?' => 'help'];
   /** psql's long name for the database user; pg-harden calls it --user. */
   private const ALIAS = ['username' => 'user'];
 
@@ -328,7 +383,7 @@ final class Options
     }
     // Options without a command would print the help with exit code 0 — in a script a forgotten value ("--host check") then passes.
     if ($o->command === '' && $o->values !== []) {
-      throw new HardenException('Kein Befehl angegeben (check, plan, verify, client, apply, rollback, rules) — fehlt vor dem Befehl ein Wert, etwa nach ' . Text::printable((string) end($spelled)) . '?');
+      throw new HardenException('Kein Befehl angegeben (check, plan, client, apply, rollback, rules) — fehlt vor dem Befehl ein Wert, etwa nach ' . Text::printable((string) end($spelled)) . '?');
     }
     // For client --user is an account of this machine; -U and --username always mean the database user, as in psql.
     if ($o->command === 'client' && in_array($spelled['user'] ?? null, ['-U', '--username'], true)) {
@@ -1044,7 +1099,7 @@ final class Checker
 
   /**
    * Status rules: findings always win (fail), even if some databases could not be checked;
-   * anything not checked sets "incomplete" so neither the exit code nor verify can treat it as clean.
+   * anything not checked sets "incomplete" so neither the exit code nor a comparison (-f) can treat it as clean.
    */
   private function evaluate(Rule $rule): array
   {
@@ -2149,7 +2204,7 @@ final class HtmlRenderer
     return $out . ($findings !== '' ? "<ul class=\"findings\">$findings</ul>" : '') . '</li>';
   }
 
-  /** The comparison of verify: warnings, the four counts, then one table per non-empty list (one row per rule). */
+  /** The comparison of check -f / client -f: warnings, the four counts, then one table per non-empty list (one row per rule). */
   private static function comparison(array $diff): string
   {
     $out = '<section id="comparison"><h2>Vergleich mit dem Bericht vom ' . self::esc(TextRenderer::when((string) $diff['previous_created_at'])) . '</h2>';
@@ -2606,16 +2661,20 @@ final class App
         return self::help();
       }
       if ($opt->has('extra-candidates')) {
-        if (!in_array($opt->command, ['check', 'plan', 'verify', 'apply'], true)) {
-          throw new HardenException('--extra-candidates gilt nur für check, plan, verify und apply.');
+        if (!in_array($opt->command, ['check', 'plan', 'apply'], true)) {
+          throw new HardenException('--extra-candidates gilt nur für check, plan und apply.');
         }
         WeakPasswords::useExtra(ExtraCandidates::load((string) $opt->get('extra-candidates')));
+      }
+      foreach (['output' => '-o (--output)', 'file' => '-f (--file)'] as $key => $spelled) {
+        if ($opt->has($key) && !in_array($opt->command, ['check', 'client'], true)) {
+          throw new HardenException("$spelled gilt nur für check und client.");
+        }
       }
       $catalog = Catalog::load(__DIR__);
       return match ($opt->command) {
         'check' => self::check($opt, $catalog),
         'plan' => self::plan($opt, $catalog),
-        'verify' => self::verify($opt, $catalog),
         'client' => self::client($opt, $catalog),
         'apply' => (new Applier(new Connector($opt), $catalog, $opt))->run(),
         'rollback' => (new Rollback(new Connector($opt), $opt))->run(),
@@ -2638,8 +2697,17 @@ final class App
 
   private static function check(Options $opt, Catalog $catalog): int
   {
+    if ($opt->has('scan')) {
+      throw new HardenException('--scan gilt nur für client.');
+    }
+    // Names and earlier report are settled before the run: a typo must not cost a full check.
+    $files = self::outputFiles($opt, new DateTimeImmutable());
+    $previous = self::previous($opt, 'server');
     $report = self::runCheck(new Connector($opt), $opt, $catalog);
-    self::output($opt, $report);
+    if ($previous !== null) {
+      $report['comparison'] = Verifier::compare($previous, $report);
+    }
+    self::output($files, $report);
     return Report::exitCode($report);
   }
 
@@ -2655,51 +2723,45 @@ final class App
     return Report::exitCode($report);
   }
 
-  private static function verify(Options $opt, Catalog $catalog): int
+  /** The earlier report of -f, or null without -f. Its mode must match the command: a client report is compared by client. */
+  private static function previous(Options $opt, string $mode): ?array
   {
-    $file = $opt->get('previous') ?? throw new HardenException('verify braucht --previous=<report.json>');
-    if (!is_file($file) || !is_readable($file)) {
-      throw new HardenException("$file ist nicht lesbar.");
+    if (!$opt->has('file')) {
+      return null;
     }
-    if (filesize($file) > 52428800) {
-      throw new HardenException("$file ist größer als 50 MB — kein pg-harden-Bericht.");
-    }
-    $previous = json_decode((string) file_get_contents($file), true);
+    $file = ReportName::previous((string) $opt->get('file'));
+    // One handle, judged by fstat: an entry swapped after a size check for a device, a FIFO or a growing file is not read (see Fs::read).
+    $json = Fs::read($file, 52428800) ?? throw new HardenException("$file ist nicht lesbar, keine reguläre Datei oder größer als 50 MB.");
+    $previous = json_decode($json, true);
     if (!Verifier::isReport($previous)) {
       throw new HardenException("$file ist kein pg-harden-Bericht ab Version 0.2.");
     }
-    $mode = (string) ($previous['meta']['mode'] ?? 'server');
-    if ($mode === 'client') {
-      foreach (['host', 'port', 'dbname', 'sslmode', 'databases', 'dir', 'extra-candidates'] as $serverOnly) {
-        if ($opt->has($serverOnly)) {
-          throw new HardenException("--$serverOnly gilt nicht beim Vergleich eines Client-Berichts.");
-        }
-      }
-      $ctx = ClientContext::resolve($opt);
-      $report = Report::buildClient($ctx, $catalog, ClientChecker::run($catalog, $ctx));
-    } elseif ($mode === 'server') {
-      if ($opt->has('scan')) {
-        throw new HardenException('--scan gilt nur für client.');
-      }
-      $report = self::runCheck(new Connector($opt), $opt, $catalog);
-    } else {
-      throw new HardenException("$file hat einen unbekannten Berichtsmodus.");
+    $found = $previous['meta']['mode'] ?? 'server';
+    if ($found !== $mode) {
+      throw new HardenException(match ($found) {
+        'client' => "$file ist ein Bericht von client — mit client -f vergleichen.",
+        'server' => "$file ist ein Bericht von check — mit check -f vergleichen.",
+        default => "$file hat einen unbekannten Berichtsmodus.",
+      });
     }
-    $report['comparison'] = Verifier::compare($previous, $report);
-    self::output($opt, $report);
-    return Report::exitCode($report);
+    return $previous;
   }
 
   private static function client(Options $opt, Catalog $catalog): int
   {
-    foreach (['host', 'port', 'dbname', 'sslmode', 'databases', 'dir', 'previous'] as $serverOnly) {
+    foreach (['host', 'port', 'dbname', 'sslmode', 'databases', 'dir'] as $serverOnly) {
       if ($opt->has($serverOnly)) {
         throw new HardenException("--$serverOnly gilt nicht für client (keine Datenbankverbindung).");
       }
     }
+    $files = self::outputFiles($opt, new DateTimeImmutable());
+    $previous = self::previous($opt, 'client');
     $ctx = ClientContext::resolve($opt);
     $report = Report::buildClient($ctx, $catalog, ClientChecker::run($catalog, $ctx));
-    self::output($opt, $report);
+    if ($previous !== null) {
+      $report['comparison'] = Verifier::compare($previous, $report);
+    }
+    self::output($files, $report);
     return Report::exitCode($report);
   }
 
@@ -2714,45 +2776,96 @@ final class App
     return 0;
   }
 
-  private static function output(Options $opt, array $report): void
+  /**
+   * The files of -o at time $at (empty without -o). Fixed once at the start of the run: an unknown placeholder or a missing
+   * directory fails before the check, and a run across midnight still writes where it was checked (-o reports/%y%m%d/audit).
+   *
+   * @return array<string, string> file => json|html|text
+   */
+  private static function outputFiles(Options $opt, DateTimeInterface $at): array
   {
-    $content = match ($opt->get('format', 'text')) {
-      'json' => Text::json($report, ascii: $opt->get('out') === null),
-      'html' => HtmlRenderer::render($report),
-      'text' => TextRenderer::render($report),
-      default => throw new HardenException('--format muss text, json oder html sein'),
-    };
-    $out = $opt->get('out');
-    if ($out !== null) {
-      // A new file of this account, restricted while still empty, then put in place: the report never carries inherited access
-      // rights, and a handle another account kept open on an existing file of that name never sees the new content.
-      // Created, restricted and written through one handle: nothing goes through the path between restricting and writing.
-      $tmp = $out . '.' . bin2hex(random_bytes(6)) . '.tmp';
-      $fh = Fs::attempt(fn() => fopen($tmp, 'x'));
-      if ($fh === null) {
-        throw new HardenException("$out lässt sich nicht anlegen (Verzeichnis nicht beschreibbar?).");
-      }
-      try {
-        try {
-          Files::lockDown($tmp);
-          $written = Fs::attempt(fn() => fwrite($fh, $content)) === strlen($content);
-          Fs::attempt(fn() => fsync($fh));
-        } finally {
-          $closed = Fs::attempt(fn() => fclose($fh)) === true;
-        }
-        if (!$written || !$closed) {
-          throw new HardenException("$out konnte nicht vollständig geschrieben werden.");
-        }
-        if (Fs::attempt(fn() => rename($tmp, $out)) !== true) {
-          throw new HardenException("$out lässt sich nicht schreiben (Verzeichnis oder vorhandener Eintrag gleichen Namens).");
-        }
-      } finally {
-        Fs::attempt(fn() => file_exists($tmp) && unlink($tmp));
-      }
-      Out::write("Bericht geschrieben: $out (" . TextRenderer::findings($report['meta']['counts']['fail']) . ")\n");
-    } else {
-      Out::write($content);
+    if (!$opt->has('output')) {
+      return [];
     }
+    $files = ReportName::outputs((string) $opt->get('output'), $at);
+    foreach (array_keys($files) as $file) {
+      if (!is_dir(dirname($file))) {
+        throw new HardenException('Verzeichnis ' . Text::printable(dirname($file)) . ' für -o gibt es nicht.');
+      }
+    }
+    return $files;
+  }
+
+  /**
+   * Without -o the text report goes to the terminal; with -o the files fixed at the start of the run ($files, see outputFiles) are
+   * written and the terminal names them. Everything is rendered and written to temporary files first, then put in place: a renderer
+   * or a target that fails leaves no half set behind.
+   *
+   * @param array<string, string> $files file => json|html|text
+   */
+  private static function output(array $files, array $report): void
+  {
+    if ($files === []) {
+      Out::write(TextRenderer::render($report));
+      return;
+    }
+    $content = [];
+    foreach ($files as $file => $format) {
+      $content[$file] = match ($format) {
+        'json' => Text::json($report),
+        'html' => HtmlRenderer::render($report),
+        'text' => TextRenderer::render($report),
+      };
+    }
+    $tmp = [];
+    $placed = [];
+    try {
+      foreach ($content as $file => $text) {
+        $tmp[$file] = self::writeTemp($file, $text);
+      }
+      foreach ($tmp as $file => $t) {
+        if (Fs::attempt(fn() => rename($t, $file)) !== true) {
+          throw new HardenException("$file lässt sich nicht schreiben (Verzeichnis oder Eintrag gleichen Namens, der sich nicht ersetzen lässt)."
+            . ($placed !== [] ? ' Bereits geschrieben: ' . implode(', ', $placed) . '.' : ''));
+        }
+        $placed[] = $file;
+      }
+    } finally {
+      foreach ($tmp as $t) {
+        Fs::attempt(fn() => file_exists($t) && unlink($t));
+      }
+    }
+    Out::write('Bericht geschrieben (' . TextRenderer::findings($report['meta']['counts']['fail']) . "):\n  "
+      . implode("\n  ", array_map(fn($f) => Text::printable($f), array_keys($files))) . "\n");
+  }
+
+  /** Writes $content to a new temporary file next to $out and returns its name; the caller puts it in place. */
+  private static function writeTemp(string $out, string $content): string
+  {
+    // A new file of this account, restricted while still empty, then put in place: the report never carries inherited access
+    // rights, and a handle another account kept open on an existing file of that name never sees the new content.
+    // Created, restricted and written through one handle: nothing goes through the path between restricting and writing.
+    $tmp = $out . '.' . bin2hex(random_bytes(6)) . '.tmp';
+    $fh = Fs::attempt(fn() => fopen($tmp, 'x'));
+    if ($fh === null) {
+      throw new HardenException("$out lässt sich nicht anlegen (Verzeichnis nicht beschreibbar?).");
+    }
+    try {
+      try {
+        Files::lockDown($tmp);
+        $written = Fs::attempt(fn() => fwrite($fh, $content)) === strlen($content);
+        Fs::attempt(fn() => fsync($fh));
+      } finally {
+        $closed = Fs::attempt(fn() => fclose($fh)) === true;
+      }
+      if (!$written || !$closed) {
+        throw new HardenException("$out konnte nicht vollständig geschrieben werden.");
+      }
+    } catch (Throwable $e) {
+      Fs::attempt(fn() => file_exists($tmp) && unlink($tmp));
+      throw $e;
+    }
+    return $tmp;
   }
 
   private static function help(): int
@@ -2762,21 +2875,29 @@ final class App
     $legal = wordwrap(LEGAL_NOTICE, 100);
     Out::write(<<<TXT
       pg-harden {$version} — prüft PostgreSQL gegen einen Regelkatalog, schreibt Änderungsvorschläge, vergleicht Berichte.
-      check, plan, verify, client und rules schreiben nichts auf den Server. apply und rollback verändern ihn nur mit
+      check, plan, client und rules schreiben nichts auf den Server. apply und rollback verändern ihn nur mit
       ausdrücklichem --execute (bzw. gegen ein Journal) — mit Sicherung, Prüfung durch den Server und Anmeldetest.
 
-        check   Instanz prüfen                  --format=text|json|html --out=DATEI
+        check   Instanz prüfen                  [-f FRÜHERER_BERICHT] [-o NAME]
         plan    Änderungsplan schreiben         --dir=NEUES_VERZEICHNIS (führt nichts aus)
-        verify  erneut prüfen und vergleichen   --previous=report.json
         client  Rechner prüfen, von dem aus verbunden wird (ohne Datenbankverbindung)
-                --user=KONTO (fremdes Konto: Administrator/root nötig)  --scan=VERZ1,VERZ2  --format=… --out=DATEI
+                --user=KONTO (fremdes Konto: Administrator/root nötig)  --scan=VERZ1,VERZ2  [-f …] [-o …]
         apply   Plan ausführen (Trockenlauf, bis --execute --dir=NEUES_VERZEICHNIS angegeben ist)
                 --rules=ID,ID  --include-confirm=ID,ID (Regeln mit "confirm" einzeln freigeben)  --yes
         rollback  apply zurücknehmen: --dir=<Journal-Verzeichnis von apply>
         rules   Regelkatalog anzeigen
 
+      Bericht:  ohne -o als Text im Terminal
+                -o NAME, --output NAME  schreibt NAME.json und NAME.html; endet NAME auf .json, .html, .htm oder .txt,
+                         nur diese eine Datei (jeder andere Punkt gehört zum Namen: -o audit.261028)
+                         Platzhalter wie log_filename: %Y %y %m %d %H %M %S, %% für ein Prozentzeichen (-o audit.%y%m%d;
+                         in einer Windows-.bat-Datei jedes % verdoppeln: audit.%%y%%m%%d)
+                         vorhandene Dateien gleichen Namens werden ersetzt (mehrmals am Tag: -o audit.%y%m%d-%H%M)
+                -f NAME, --file NAME    mit einem früheren Bericht vergleichen (liest NAME.json, Datum eingesetzt): behoben, neu, weiter offen
+                         check -f audit.261021 -o audit.261028
+
       Passwortprüfung: --extra-candidates=DATEI  eigene Begriffe (höchstens 100 Einträge, einer je Zeile, je höchstens 64 Zeichen, nur ASCII),
-                       Datei nur für den Betreiber lesbar; gilt für check, plan, verify und apply
+                       Datei nur für den Betreiber lesbar; gilt für check, plan und apply
 
       Verbindung: --host --port --user --dbname --sslmode --databases=a,b
                   wie bei psql auch -h HOST -p PORT -U BENUTZER -d DATENBANK (und --username); lang --host=db1 oder

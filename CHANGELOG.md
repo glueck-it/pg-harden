@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **Command line recut: `-o` writes the report, `-f` compares with an earlier one (breaking, no aliases).** One way to get a report out
+  of `check` and `client` instead of `--format`, `--out` and a separate command: without `-o` the text report goes to the terminal as
+  before; `-o NAME` (`--output`) writes `NAME.json` and `NAME.html` and the terminal names the files and the number of findings. A name
+  ending in `.json`, `.html`, `.htm` or `.txt` writes only that file; any other dot belongs to the name (`-o audit.261028`). `-f NAME`
+  (`--file`) reads `NAME.json` (or `NAME` if it ends in `.json`; HTML and text are refused) and adds the comparison (fixed, new, still
+  open, not comparable) — `verify --previous=x.json` is now `check -f x` or `client -f x`; the command decides the mode, a client report
+  given to `check` (or the other way round) is refused. Placeholders as in PostgreSQL's `log_filename` put the start of the run into the
+  name (`%Y %y %m %d %H %M %S`, `%%`; `-o audit.%y%m%d`), no separate switch; an unknown placeholder, a name ending in a directory
+  separator, a name of only dots before the ending or a missing directory fails before the run, and so does an unreadable `-f` report;
+  the names are fixed there, so a run across midnight writes where it was checked. All files are rendered and written to temporary files
+  before any is put in place; if one cannot be put in place, the message names those already written. Removed: `--format`, `--out`,
+  `--previous`, the command `verify`; JSON is no longer printed to the terminal (`Text::json` lost its ASCII mode). `-o`/`-f` are refused
+  for `plan`, `apply`, `rollback` and `rules`; `--scan` is refused for `check`; `--extra-candidates` applies to `check`, `plan` and
+  `apply`. Tests: `tests/options-test.php` (62 cases, including the names of `-o`/`-f`), `tests/windows-admin-test.ps1` and
+  `tests/run-version-matrix.sh` read the JSON report through `-o`; `examples/generate.sh` writes the HTML reports with `-o` and the
+  comparison as `05-compare.*`; `examples/output/` regenerated with this state. Reading the earlier report goes through `Fs::read`
+  (one handle, regular file only, size by `fstat`, at most 50 MB) instead of checking and reading the path in separate steps.
 - **HTML run log of `apply` and `rollback` in the journal:** `apply --execute` writes `apply.html` next to `apply-log.json` — outcome
   (executed, with warnings, failed, aborted), tiles for findings before/after and the comparison, the planned changes with the state of each
   SQL statement from the journal, what was not done and why, the steps with time and status, the files touched with their backups, the
@@ -9,24 +26,24 @@
   a run that ends with an exception leaves it as well. `rollback` writes `rollback.html` (complete) or `rollback-attempt-<time>.html` next to
   its log. The terminal output stays text and names the file; not being able to write the protocol is reported on stderr and changes neither
   the run nor its exit code. Same frame as the report (`HtmlRenderer::page`: CSP by hash, no external resources, everything escaped).
-- **HTML report rebuilt (`check`, `verify`, `client` with `--format=html`):** the outline of the text report — header, summary,
+- **HTML report rebuilt (`check`, `client`, and their comparison):** the outline of the text report — header, summary,
   comparison, findings by severity, errors, rules to review, incomplete, skipped and clean rules, mappings, result, notices — instead of
   one table sorted by attention. On top a table of contents and an overview (tiles per severity and state, one bar over all rules);
   a colour per severity and state, a print layout (light, no navigation, rules and table rows kept together, table headers repeated)
-  and dark mode on screen; the comparison of `verify` as tables (one row per rule with its places) instead of preformatted text;
+  and dark mode on screen; the comparison as tables (one row per rule with its places) instead of preformatted text;
   mapping and comparison tables stack on narrow screens. Still one file without external resources and without scripts; the CSP now
   admits the embedded stylesheet by its SHA-256 hash instead of `'unsafe-inline'` and adds `base-uri 'none'` and `form-action 'none'`.
   Every value goes through `Text::printable` and `htmlspecialchars`; class names and anchors come from fixed keys only. Text and HTML
   share the outline (`Report::summary`, `Verifier::grouped`), the text report is byte-identical. Test: `tests/html-report-test.php`
   (offline, hostile values, allowlist of elements and attributes, CSP hash).
-- **`verify` and the previous report (a file of unknown origin):** an unexpected severity (for example an array) no longer aborts the
+- **The comparison and the previous report (a file of unknown origin):** an unexpected severity (for example an array) no longer aborts the
   run with exit code 2 — `Verifier::compare` keeps only known severities, unknown ones stay empty; `meta.mode` must be a string like the
   other header fields (`Verifier::isReport`), otherwise the report is refused with its message instead of a PHP warning. Dates are read
   only in the form pg-harden writes (ATOM, optionally with fractions); before, the lenient parser turned values such as `now` or a date
   followed by a NUL into a plausible date in the comparison heading, now they are shown as they are.
 - **Command line as in psql, in addition to the long names:** `-h HOST`, `-p PORT`, `-U USER`, `-d DBNAME` and `--username`. Long
   forms take the value after `=` or as the next argument (`--host=db1`, `--host db1`; also every other option with a value, such as
-  `--out report.html`), short forms as the next argument or attached (`-h db1`, `-hdb1`); a value starting with `=` (`-h=db1`,
+  `--output report`), short forms as the next argument or attached (`-h db1`, `-hdb1`); a value starting with `=` (`-h=db1`,
   `--host==db1`) is refused. `-h` is the host as in psql; help is `--help` or `-?` and wins wherever it stands. A value given as the next argument never starts with `-`, so a
   forgotten value fails instead of swallowing the next option; options without a command are refused (exit code 2) instead of printing
   the help with exit code 0. `-U` and `--username` always mean the database user and are refused for `client`, where `--user` names an
@@ -70,17 +87,17 @@
     and verify `stat`/`fstat` identity rather than holding parent directories open without `FILE_SHARE_DELETE`. A hard link is no
     redirect by its path; Windows 11 lets a non-administrator create one only to a file the account may write. Whether a file exists, its
     name and its size may still be taken through a redirect. Files outside the profile or data directory are not judged.
-  - **Strict ACLs for journals, plan directories and `--out` reports on Windows (`Files::lockDown`, `Journal::load`,
-    `WindowsFacts::isStrictlyPrivate`):** `Files::prepareDir` and `App::output` (`--out`) restrict the directory or file to the
+  - **Strict ACLs for journals, plan directories and `-o` reports on Windows (`Files::lockDown`, `Journal::load`,
+    `WindowsFacts::isStrictlyPrivate`):** `Files::prepareDir` and `App::output` (`-o`) restrict the directory or file to the
     executing account, `SYSTEM` and `Administrators` (`icacls`) — changed: also an existing empty directory given with `--dir` (on Linux
     and other Unix systems `chmod 0700` on it as well), which on Windows must belong to this account, `SYSTEM` or the Administrators (an
-    owner keeps the right to change the ACL); a directory of another account is refused before its ACL is touched. A `--out` report is
+    owner keeps the right to change the ACL); a directory of another account is refused before its ACL is touched. An `-o` report is
     written to a new file of this account, restricted while still empty, and then renamed into place (on every platform), so a handle
     kept open on an existing file of that name never sees the new content. Without the own SID (`whoami`) nothing is restricted and the
     run stops. `Journal::load` verifies via the open handle that owner and entries leave no other SID access before trusting a journal.
   - **`check` without full rights (all platforms):** when `pg_file_settings`, `pg_hba_file_rules` or `pg_tablespace` cannot be read,
     `os.config_permissions` and `os.tablespace_permissions` now report "nicht geprüft" instead of passing in silence.
-  - **`verify` for client reports and version `0.4.0+`:** `verify --previous=<report.json>` now compares both `check` and `client`
+  - **Comparison for client reports and version `0.4.0+`:** the comparison (now `-f`) works for both `check` and `client`
     reports, and `Verifier::isReport` accepts reports from `0.4.0` and later releases.
   - **Tests:** `tests/windows-redirect.php` (throw-away directories in `%TEMP%`, no administrator rights needed), `tests/catalog-test.php`
     (offline test for the rule catalog, framework mappings and `Verifier`) and `tests/windows-admin-test.ps1` (for an elevated PowerShell:

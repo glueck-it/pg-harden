@@ -1,6 +1,6 @@
 # Manuelle Maßnahmen
 
-Erzeugt von pg-harden 0.3.2 am 26.10.2026 16:10.
+Erzeugt von pg-harden 0.4.0 am 29.10.2026 13:50.
 
 Automatisch erzeugter Vorschlag. Auswirkungen auf Anwendungen vor dem Ausführen in einer Testumgebung prüfen. Der Plan enthält Rollen-, Objekt- und Netznamen: vertraulich ablegen.
 
@@ -8,7 +8,7 @@ Ohne Gewähr (MIT-Lizenz). Prüfergebnisse und Pläne sind Vorschläge: Befunde 
 
 ## Nicht vollständig geprüft
 
-- Dienstdatei und Prozessumgebung enthalten keine Klartext-Geheimnisse (os.service_unit): ` nicht geprüft: Umgebung des Serverprozesses nicht lesbar (/proc/1/environ — root bzw. Dienstkonto nötig); Kein systemd-Dienst ermittelt — Dienstdatei nicht geprüft `
+- Dienstkonfiguration und Prozessumgebung sind geschützt und enthalten keine Klartext-Geheimnisse (os.service_unit): ` nicht geprüft: Umgebung des Serverprozesses nicht lesbar (/proc/1/environ — root bzw. Dienstkonto nötig); Kein systemd-Dienst ermittelt — Dienstdatei nicht geprüft `
 - Serverprogramm stammt aus der Paketverwaltung (Linux) bzw. ist unverändert (Windows) (os.package_source): ` nicht geprüft: Programmdatei des Serverprozesses nicht ermittelbar (/proc/1/exe — root nötig) `
 
 ## TLS ist eingeschaltet (tls.ssl_enabled, hoch)
@@ -102,11 +102,11 @@ BYPASSRLS hebelt jede Policy aus; das Recht fällt bei Prüfungen der Policies l
 
 - ` support: BYPASSRLS `
 
-## pgAudit ist geladen (log.pgaudit, mittel)
+## pgAudit ist geladen und eingerichtet (log.pgaudit, mittel)
 
-Die Bordmittel protokollieren Anweisungstexte, aber nicht zuverlässig, auf welche Tabellen eine Anweisung tatsächlich zugreift (Views, Funktionen, dynamisches SQL). Das leistet pgAudit mit Session- und Object-Audit.
+Die Bordmittel protokollieren Anweisungstexte, aber nicht zuverlässig, auf welche Tabellen eine Anweisung tatsächlich zugreift (Views, Funktionen, dynamisches SQL). Das leistet pgAudit mit Session- und Object-Audit — allerdings erst, wenn pgaudit.log oder pgaudit.log_role auch gesetzt ist. Als eingerichtet gilt auch ein Wert, der nur für eine Rolle oder Datenbank gesetzt ist (ALTER ROLE/DATABASE … SET); ob er die gewünschten Sitzungen erfasst, prüft die Regel nicht.
 
-**Maßnahme:** pgaudit installieren, in shared_preload_libraries aufnehmen (Neustart), pgaudit.log bzw. Objekt-Audit einrichten.
+**Maßnahme:** pgaudit installieren, in shared_preload_libraries aufnehmen (Neustart), pgaudit.log (z. B. 'ddl, role') bzw. Objekt-Audit über pgaudit.log_role einrichten.
 
 - ` shared_preload_libraries: pgaudit nicht geladen `
 
