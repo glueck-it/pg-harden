@@ -136,7 +136,9 @@ interpret are never written to an SQL file. The plan directory must be new or em
 exclusively, and nothing half-finished is left behind on abort.
 
 The comparison (`-f`) counts an earlier finding as fixed only if exactly that place — for database findings exactly that database — was checked again in the
-current run; otherwise it is reported as "not comparable".
+current run; otherwise it is reported as "not comparable". Findings from `pg_hba.conf` are matched by the content of the line (file, type,
+databases, users, address and netmask — not method or line number; identical lines in their order): a line inserted or removed above
+does not turn an open finding into "fixed" and "new". Reports before 0.4.1 carry no such content; with them, matching stays by line number.
 
 ## `apply` — run the plan, protected against lockouts
 
@@ -327,6 +329,11 @@ container scripts change passwords, roles and databases and only start with `PGH
 against an instance with real data.
 
 ## Status
+
+0.4.1 (2026-10-29): fixes — `auth.auth_delay` no longer fails when `auth_delay` is loaded (the value carries a unit), the comparison
+matches `pg_hba.conf` findings by the content of the line instead of its number, `hba.host_without_tls` leaves out lines that an
+earlier `reject` line fully covers, `apply` leaves lines of included hba files (PostgreSQL 16+) to be changed by hand instead of
+aiming at the main file, `hba.superuser_remote` follows the evaluation order across included files and the address family.
 
 0.4.0 (2026-10-29): **security fix** for Windows (as administrator, an account owning the data directory or the examined profile could
 redirect reads and writes through a junction; affected 0.3.0 to 0.3.2), **command line recut** — `-o NAME` writes JSON and HTML, `-f NAME` compares with an earlier report, placeholders

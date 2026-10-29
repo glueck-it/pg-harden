@@ -1002,6 +1002,17 @@ final class Applier
         $plan['skipped'][] = [$result['id'], 'Zeile ' . $f['hba_line'] . ': Zeilen vom Typ ' . Text::printable($f['hba_type']) . ' ändert apply nie (Zugang über den Unix-Socket bleibt)'];
         continue;
       }
+      // From PostgreSQL 16 a line may come from an included file; its number says nothing about pg_hba.conf itself.
+      // Before 16 every line is one of pg_hba.conf. Whatever cannot be confirmed as the main file stays out.
+      $main = $ctx->local?->path('hba_file');
+      $file = (string) ($f['hba_file'] ?? '');
+      $inMain = $main !== null && ($file === '' ? $ctx->versionNum < 160000
+        : $file === $main || (Fs::canonical($file) ?? "\0a") === (Fs::canonical($main) ?? "\0b"));
+      if (!$inMain) {
+        $plan['skipped'][] = [$result['id'], 'Zeile ' . $f['hba_line'] . ($file !== '' ? ' in ' . Text::printable($file) : '')
+          . ': nicht sicher eine Zeile von pg_hba.conf (eingebundene Datei oder Datei nicht feststellbar) — von Hand ändern'];
+        continue;
+      }
       $plan['hba'][] = ['rule' => $result['id'], 'line' => $f['hba_line'], 'kind' => $fix['kind'], 'from' => (array) $fix['from'], 'to' => $fix['to']];
     }
   }

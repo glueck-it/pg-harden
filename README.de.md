@@ -133,7 +133,10 @@ Das Plan-Verzeichnis muss neu oder leer sein und dem aufrufenden Benutzer gehör
 angelegt, bei einem Abbruch wird nichts Halbfertiges zurückgelassen.
 
 Der Vergleich (`-f`) wertet einen früheren Befund nur dann als behoben, wenn genau diese Stelle — bei Datenbank-Befunden
-genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erscheint er als „nicht vergleichbar“.
+genau diese Datenbank — im aktuellen Lauf erneut geprüft wurde; sonst erscheint er als „nicht vergleichbar“. Befunde aus
+`pg_hba.conf` werden über den Inhalt der Zeile zugeordnet (Datei, Typ, Datenbanken, Benutzer, Adresse und Netzmaske — nicht Methode und Zeilennummer; gleichlautende Zeilen in ihrer Reihenfolge):
+eine eingefügte oder gelöschte Zeile darüber macht aus einem offenen Befund kein „behoben“ und „neu“. Berichte vor 0.4.1 tragen
+diese Angabe nicht; mit ihnen bleibt es bei der Zeilennummer.
 
 ## `apply` — Plan ausführen, mit Schutz vor dem Aussperren
 
@@ -350,6 +353,12 @@ Die Container-Skripte ändern Passwörter, Rollen und Datenbanken und starten nu
 Wegwerf-Container ausführen**, nie gegen eine Instanz mit echten Daten.
 
 ## Stand
+
+0.4.1 (29.10.2026): Korrekturen — `auth.auth_delay` bricht nicht mehr ab, wenn `auth_delay` geladen ist (der Wert trägt eine
+Einheit), der Vergleich ordnet Befunde aus `pg_hba.conf` über den Inhalt der Zeile statt über ihre Nummer zu, `hba.host_without_tls`
+lässt Zeilen aus, die eine vorangehende `reject`-Zeile vollständig abdeckt, `apply` lässt Zeilen aus eingebundenen hba-Dateien
+(PostgreSQL 16+) mit Hinweis zur Änderung von Hand aus, statt die Hauptdatei anzusteuern, `hba.superuser_remote` beachtet die
+Auswertungsreihenfolge über eingebundene Dateien und die Adressfamilie.
 
 0.4.0 (29.10.2026): **Sicherheitskorrektur** für Windows (als Administrator konnte ein Konto, dem das Datenverzeichnis oder das
 geprüfte Profil gehört, Lese- und Schreibzugriffe über eine Junction umlenken; betroffen 0.3.0 bis 0.3.2), **Kommandozeile neu geschnitten** — `-o NAME` schreibt JSON und HTML, `-f NAME` vergleicht mit einem früheren

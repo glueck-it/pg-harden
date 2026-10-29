@@ -20,7 +20,7 @@ $expect = function (string $name, bool $ok, string $detail = '') use (&$failed, 
 };
 
 $catalog = Catalog::load(dirname(__DIR__));
-$expect('Programmversion ist 0.4.0', PG_HARDEN_VERSION === '0.4.0', PG_HARDEN_VERSION);
+$expect('Programmversion ist 0.4.1', PG_HARDEN_VERSION === '0.4.1', PG_HARDEN_VERSION);
 $expect('Katalogversion gesetzt', str_contains($catalog->version, '2026.10'), $catalog->version);
 $expect('86 Regeln im Katalog', count($catalog->rules) === 86, (string) count($catalog->rules));
 $expect('3 Norm-Zuordnungen geladen', count($catalog->mappings) === 3, (string) count($catalog->mappings));
@@ -131,6 +131,77 @@ $clientCurr['results'][0]['findings'] = [];
 $diffClient = Verifier::compare($clientPrev, $clientCurr);
 $expect('Verifier::compare Client: behobener Befund erkannt', count($diffClient['fixed']) === 1 && $diffClient['fixed'][0]['rule'] === 'client.psql_history');
 $expect('Verifier::compare Client: abweichendes Konto gewarnt', $diffClient['warnings'] === ['Konto weicht ab: alice → bob'], implode('; ', $diffClient['warnings']));
+
+// hba findings: an inserted line shifts the numbers, the selector (hba_key) stays.
+$hbaRule = fn(array $findings) => [
+  'id' => 'hba.host_without_tls', 'title' => 'TLS', 'severity' => 'medium', 'status' => $findings === [] ? 'pass' : 'fail',
+  'incomplete' => false, 'checked_databases' => [], 'findings' => $findings,
+];
+// The selector as the rules build it: file:type ["databases"] ["users"] address/netmask
+$hbaKey = function (string $line): string {
+  [$type, $db, $user, $addr] = explode(' ', $line);
+  return '/etc/pg_hba.conf:' . $type . ' ' . json_encode(explode(',', $db)) . ' ' . json_encode(explode(',', $user)) . ' ' . $addr;
+};
+$hbaF = fn(int $line, string $key, ?string $method = 'scram-sha-256') => ['database' => null, 'object' => "Zeile $line", 'detail' => "$key $method", 'hba_key' => $hbaKey($key)];
+$hbaPrev = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(90, 'host all app 10.0.0.0/255.0.0.0'), $hbaF(91, 'host all all 192.168.0.0/255.255.0.0')])]];
+$hbaCurr = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(91, 'host all app 10.0.0.0/255.0.0.0'), $hbaF(92, 'host all all 192.168.0.0/255.255.0.0')])]];
+$d = Verifier::compare($hbaPrev, $hbaCurr);
+$expect('Verifier::compare hba: eingefügte Zeile → beide weiter offen, nichts behoben/neu',
+  count($d['open']) === 2 && $d['fixed'] === [] && $d['new'] === [] && $d['open'][0]['object'] === 'Zeile 91',
+  json_encode([count($d['open']), count($d['fixed']), count($d['new'])]));
+$hbaCurr2 = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(91, 'host all all 192.168.0.0/255.255.0.0', 'md5')])]];
+$d = Verifier::compare($hbaPrev, $hbaCurr2);
+$expect('Verifier::compare hba: entfernte Zeile behoben, Methodenwechsel bleibt offen',
+  count($d['fixed']) === 1 && $d['fixed'][0]['object'] === 'Zeile 90' && count($d['open']) === 1 && $d['new'] === []);
+$dup = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(5, 'host all all 10.0.0.0/255.0.0.0'), $hbaF(9, 'host all all 10.0.0.0/255.0.0.0')])]];
+$dupCurr = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(6, 'host all all 10.0.0.0/255.0.0.0')])]];
+$d = Verifier::compare($dup, $dupCurr);
+$expect('Verifier::compare hba: zwei gleiche Zeilen, eine entfernt → 1 offen, 1 behoben', count($d['open']) === 1 && count($d['fixed']) === 1);
+$old = $hbaPrev;
+foreach ($old['results'][0]['findings'] as &$of) {
+  unset($of['hba_key']);
+}
+unset($of);
+$d = Verifier::compare($old, $hbaCurr);
+$expect('Verifier::compare hba: Bericht ohne hba_key (vor 0.4.1) → Zuordnung über die Zeilennummer',
+  count($d['open']) === 1 && $d['open'][0]['object'] === 'Zeile 91' && count($d['fixed']) === 1 && count($d['new']) === 1);
+$md5 = fn(array $lines) => ['meta' => $sampleReport['meta'], 'results' => [array_merge($hbaRule(array_map(fn($l) => $hbaF($l, 'host all app 10.0.0.0/255.0.0.0', 'md5'), $lines)), ['id' => 'hba.md5_method'])]];
+$d = Verifier::compare($md5([5, 9]), $md5([9]));
+$expect('Verifier::compare hba: zwei gleiche Zeilen, die erste umgestellt → Zeile 5 behoben, Zeile 9 offen',
+  count($d['fixed']) === 1 && $d['fixed'][0]['object'] === 'Zeile 5' && count($d['open']) === 1 && $d['open'][0]['object'] === 'Zeile 9',
+  json_encode([$d['fixed'], $d['open']]));
+$d = Verifier::compare($md5([5, 9]), $md5([6, 10]));
+$expect('Verifier::compare hba: zwei gleiche Zeilen verschoben → beide offen', count($d['open']) === 2 && $d['fixed'] === [] && $d['new'] === []);
+$d = Verifier::compare($md5([5]), $md5([2, 6]));
+$expect('Verifier::compare hba: gleiche Zeile darüber hinzugekommen → eine neu, eine offen', count($d['open']) === 1 && count($d['new']) === 1 && $d['fixed'] === []);
+$narrow = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(90, 'host all app 10.0.0.0/255.255.0.0'), $hbaF(91, 'host all all 192.168.0.0/255.255.0.0')])]];
+$d = Verifier::compare($hbaPrev, $narrow);
+$expect('Verifier::compare hba: Zeile an Ort und Stelle enger gefasst, Befund bleibt → offen, nicht behoben + neu',
+  count($d['open']) === 2 && $d['fixed'] === [] && $d['new'] === [], json_encode([count($d['open']), count($d['fixed']), count($d['new'])]));
+$replaced = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(90, 'host all ops 10.0.0.0/255.0.0.0'), $hbaF(91, 'host all all 192.168.0.0/255.255.0.0')])]];
+$d = Verifier::compare($hbaPrev, $replaced);
+$expect('Verifier::compare hba: Zeile an gleicher Stelle für andere Benutzer ersetzt → behoben + neu',
+  count($d['fixed']) === 1 && count($d['new']) === 1 && count($d['open']) === 1, json_encode([count($d['open']), count($d['fixed']), count($d['new'])]));
+$moved = ['meta' => $sampleReport['meta'], 'results' => [$hbaRule([$hbaF(91, 'host all all 192.168.0.0/255.255.0.0'), $hbaF(95, 'host all ops 172.16.0.0/255.240.0.0')])]];
+$d = Verifier::compare($hbaPrev, $moved);
+$expect('Verifier::compare hba: Zeile entfernt, andere neu an anderer Stelle → behoben + neu',
+  count($d['fixed']) === 1 && $d['fixed'][0]['object'] === 'Zeile 90' && count($d['new']) === 1 && $d['new'][0]['object'] === 'Zeile 95' && count($d['open']) === 1);
+$mixed = $hbaPrev;
+unset($mixed['results'][0]['findings'][1]['hba_key']);
+$d = Verifier::compare($mixed, $hbaCurr);
+$expect('Verifier::compare hba: nur teilweise mit hba_key → Zeilennummer für die ganze Regel',
+  count($d['open']) === 1 && $d['open'][0]['object'] === 'Zeile 91' && count($d['fixed']) === 1 && count($d['new']) === 1);
+$bad = $hbaPrev;
+$bad['results'][0]['findings'][0]['hba_key'] = ['x'];
+$bad['results'][0]['findings'][1]['hba_key'] = 7;
+$d = Verifier::compare($bad, $hbaCurr);
+$expect('Verifier::compare hba: hba_key als Array/Zahl → Zeilennummer, keine Ausnahme', count($d['fixed']) === 1 && count($d['new']) === 1);
+$err = fn(array $lines) => ['meta' => $sampleReport['meta'], 'results' => [array_merge($hbaRule(array_map(fn($l) => ['database' => null, 'object' => "Zeile $l", 'detail' => 'invalid IP mask', 'hba_key' => 'invalid IP mask'], $lines)), ['id' => 'hba.errors'])]];
+$d = Verifier::compare($err([7]), $err([8]));
+$expect('Verifier::compare hba.errors: verschobene fehlerhafte Zeile bleibt offen', count($d['open']) === 1 && $d['fixed'] === [] && $d['new'] === []);
+$errText = fn(string $text) => ['meta' => $sampleReport['meta'], 'results' => [array_merge($hbaRule([['database' => null, 'object' => 'Zeile 7', 'detail' => $text, 'hba_key' => "/etc/pg_hba.conf:$text"]]), ['id' => 'hba.errors'])]];
+$d = Verifier::compare($errText('invalid IP address "hostx"'), $errText('invalid IP address "hosty"'));
+$expect('Verifier::compare hba.errors: anderer Fehler in derselben Zeile → behoben + neu', count($d['fixed']) === 1 && count($d['new']) === 1 && $d['open'] === []);
 
 $tmp = rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'pgh-cat-' . bin2hex(random_bytes(4));
 mkdir($tmp, 0700, true);

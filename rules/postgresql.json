@@ -120,7 +120,7 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "SELECT 'Zeile ' || line_number AS object, error AS detail FROM pg_hba_file_rules WHERE error IS NOT NULL"
+        "sql": "SELECT 'Zeile ' || line_number AS object, error AS detail, coalesce(to_jsonb(pg_hba_file_rules) ->> 'file_name', '') || ':' || error AS hba_key FROM pg_hba_file_rules WHERE error IS NOT NULL"
       },
       "fix": { "type": "manual" },
       "automation": "manual",
@@ -137,12 +137,12 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || ' ' || auth_method AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND type IN ('host', 'hostnossl') AND auth_method <> 'reject' AND NOT (coalesce(address, '') ~ '^127\\.' OR address IN ('::1', 'samehost', 'localhost'))"
+        "sql": "WITH r AS (SELECT f.*, coalesce((to_jsonb(f) ->> 'rule_number')::int, f.line_number) AS pos FROM pg_hba_file_rules f WHERE f.error IS NULL) SELECT 'Zeile ' || h.line_number AS object, h.type || ' ' || array_to_string(h.database, ',') || ' ' || array_to_string(h.user_name, ',') || ' ' || coalesce(h.address, '') || ' ' || h.auth_method AS detail, h.line_number AS hba_line, h.type AS hba_type, to_jsonb(h) ->> 'file_name' AS hba_file, coalesce(to_jsonb(h) ->> 'file_name', '') || ':' || h.type || ' ' || to_jsonb(h.database)::text || ' ' || to_jsonb(h.user_name)::text || ' ' || coalesce(h.address, '') || coalesce('/' || h.netmask, '') AS hba_key FROM r h WHERE h.type IN ('host', 'hostnossl') AND h.auth_method <> 'reject' AND NOT (coalesce(h.address, '') ~ '^127\\.' OR h.address IN ('::1', 'samehost', 'localhost')) AND NOT EXISTS (SELECT 1 FROM r n WHERE n.type IN ('host', 'hostnossl') AND n.auth_method = 'reject' AND n.pos < h.pos AND (n.database @> h.database OR ('all' = ANY (n.database) AND NOT 'replication' = ANY (h.database))) AND ('all' = ANY (n.user_name) OR n.user_name @> h.user_name) AND (n.address = 'all' OR (n.address = h.address AND n.netmask IS NOT DISTINCT FROM h.netmask) OR CASE WHEN n.netmask IS NOT NULL AND h.netmask IS NOT NULL THEN CASE WHEN family(n.netmask::inet) = family(h.netmask::inet) THEN (h.address::inet & n.netmask::inet) = (n.address::inet & n.netmask::inet) AND (h.netmask::inet & n.netmask::inet) = n.netmask::inet ELSE false END ELSE false END)) ORDER BY h.pos"
       },
       "fix": { "type": "hba", "from": ["host", "hostnossl"], "to": "hostssl", "kind": "type", "requires": ["ssl_on"] },
       "automation": "confirm",
       "rationale": "Eine host-Zeile erlaubt auch unverschlüsselte Verbindungen. Ob TLS genutzt wird, entscheidet dann der Client.",
-      "remediation": "host durch hostssl ersetzen; als letzte Zeile 'hostnossl all all all reject' ergänzen."
+      "remediation": "host durch hostssl ersetzen; als letzte Zeile 'hostnossl all all all reject' ergänzen. Eine Zeile, die eine vorangehende 'hostnossl … reject'- oder 'host … reject'-Zeile für Datenbank, Benutzer und Adresse vollständig abdeckt, meldet die Regel nicht."
     },
     {
       "id": "auth.password_encryption",
@@ -216,7 +216,7 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'trust'"
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type, to_jsonb(pg_hba_file_rules) ->> 'file_name' AS hba_file, coalesce(to_jsonb(pg_hba_file_rules) ->> 'file_name', '') || ':' || type || ' ' || to_jsonb(database)::text || ' ' || to_jsonb(user_name)::text || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') AS hba_key FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'trust'"
       },
       "fix": { "type": "hba", "from": "trust", "to": "scram-sha-256", "kind": "method", "requires": ["scram_passwords"] },
       "automation": "confirm",
@@ -233,7 +233,7 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'password'"
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type, to_jsonb(pg_hba_file_rules) ->> 'file_name' AS hba_file, coalesce(to_jsonb(pg_hba_file_rules) ->> 'file_name', '') || ':' || type || ' ' || to_jsonb(database)::text || ' ' || to_jsonb(user_name)::text || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') AS hba_key FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'password'"
       },
       "fix": { "type": "hba", "from": "password", "to": "scram-sha-256", "kind": "method", "requires": ["scram_passwords"] },
       "automation": "confirm",
@@ -250,7 +250,7 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'md5'"
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') AS detail, line_number AS hba_line, type AS hba_type, to_jsonb(pg_hba_file_rules) ->> 'file_name' AS hba_file, coalesce(to_jsonb(pg_hba_file_rules) ->> 'file_name', '') || ':' || type || ' ' || to_jsonb(database)::text || ' ' || to_jsonb(user_name)::text || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') AS hba_key FROM pg_hba_file_rules WHERE error IS NULL AND auth_method = 'md5'"
       },
       "fix": { "type": "hba", "from": "md5", "to": "scram-sha-256", "kind": "method", "requires": ["scram_passwords"] },
       "automation": "confirm",
@@ -267,7 +267,7 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') || ' ' || auth_method AS detail FROM pg_hba_file_rules WHERE error IS NULL AND type LIKE 'host%' AND auth_method <> 'reject' AND (address = 'all' OR (address IN ('0.0.0.0', '::') AND netmask IN ('0.0.0.0', '::')))"
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') || ' ' || auth_method AS detail, coalesce(to_jsonb(pg_hba_file_rules) ->> 'file_name', '') || ':' || type || ' ' || to_jsonb(database)::text || ' ' || to_jsonb(user_name)::text || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') AS hba_key FROM pg_hba_file_rules WHERE error IS NULL AND type LIKE 'host%' AND auth_method <> 'reject' AND (address = 'all' OR (address IN ('0.0.0.0', '::') AND netmask IN ('0.0.0.0', '::')))"
       },
       "fix": { "type": "manual" },
       "automation": "manual",
@@ -284,7 +284,7 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "WITH su AS (SELECT oid, rolname FROM pg_roles WHERE rolsuper AND rolcanlogin), covers AS (SELECT h.line_number, h.type, h.auth_method, h.database, h.address, h.netmask, h.user_name, su.rolname AS superuser FROM pg_hba_file_rules h CROSS JOIN su WHERE h.error IS NULL AND h.type LIKE 'host%' AND NOT (coalesce(h.address, '') ~ '^127\\.' OR h.address IN ('::1', 'samehost', 'localhost')) AND EXISTS (SELECT 1 FROM unnest(h.user_name) AS u WHERE u = 'all' OR u = su.rolname OR (left(u, 1) = '+' AND EXISTS (SELECT 1 FROM pg_roles g WHERE g.rolname = substr(u, 2) AND pg_has_role(su.oid, g.oid, 'MEMBER'))))) SELECT 'Zeile ' || c.line_number AS object, c.type || ' ' || array_to_string(c.user_name, ',') || ' ' || coalesce(c.address, '') || ' — Superuser ' || string_agg(c.superuser, ', ' ORDER BY c.superuser) AS detail FROM covers c WHERE c.auth_method <> 'reject' AND NOT EXISTS (SELECT 1 FROM covers r WHERE r.superuser = c.superuser AND r.auth_method = 'reject' AND (r.type = 'host' OR r.type = c.type) AND r.line_number < c.line_number AND (r.address = 'all' OR (r.address IN ('0.0.0.0', '::') AND r.netmask IN ('0.0.0.0', '::'))) AND ('all' = ANY (r.database) OR r.database @> c.database)) GROUP BY c.line_number, c.type, c.user_name, c.address ORDER BY c.line_number"
+        "sql": "WITH su AS (SELECT oid, rolname FROM pg_roles WHERE rolsuper AND rolcanlogin), covers AS (SELECT h.line_number, coalesce((to_jsonb(h) ->> 'rule_number')::int, h.line_number) AS pos, coalesce(to_jsonb(h) ->> 'file_name', '') AS file_name, h.type, h.auth_method, h.database, h.address, h.netmask, h.user_name, su.rolname AS superuser FROM pg_hba_file_rules h CROSS JOIN su WHERE h.error IS NULL AND h.type LIKE 'host%' AND NOT (coalesce(h.address, '') ~ '^127\\.' OR h.address IN ('::1', 'samehost', 'localhost')) AND EXISTS (SELECT 1 FROM unnest(h.user_name) AS u WHERE u = 'all' OR u = su.rolname OR (left(u, 1) = '+' AND EXISTS (SELECT 1 FROM pg_roles g WHERE g.rolname = substr(u, 2) AND pg_has_role(su.oid, g.oid, 'MEMBER'))))) SELECT 'Zeile ' || c.line_number AS object, c.type || ' ' || array_to_string(c.user_name, ',') || ' ' || coalesce(c.address, '') || ' — Superuser ' || string_agg(c.superuser, ', ' ORDER BY c.superuser) AS detail, c.file_name || ':' || c.type || ' ' || to_jsonb(c.database)::text || ' ' || to_jsonb(c.user_name)::text || ' ' || coalesce(c.address, '') || coalesce('/' || c.netmask, '') AS hba_key FROM covers c WHERE c.auth_method <> 'reject' AND NOT EXISTS (SELECT 1 FROM covers r WHERE r.superuser = c.superuser AND r.auth_method = 'reject' AND (r.type = 'host' OR r.type = c.type) AND r.pos < c.pos AND (r.address = 'all' OR (r.address = c.address AND r.netmask IS NOT DISTINCT FROM c.netmask) OR (r.address = '0.0.0.0' AND r.netmask = '0.0.0.0' AND c.address ~ '^[0-9.]+$') OR (r.address = '::' AND r.netmask = '::' AND c.address ~ ':')) AND (r.database @> c.database OR ('all' = ANY (r.database) AND NOT 'replication' = ANY (c.database)))) GROUP BY c.pos, c.line_number, c.file_name, c.type, c.database, c.user_name, c.address, c.netmask ORDER BY c.pos"
       },
       "fix": { "type": "manual" },
       "automation": "manual",
@@ -301,7 +301,7 @@
       "requires": "hba",
       "check": {
         "type": "query",
-        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || ' ' || auth_method || CASE WHEN verify_ca THEN ' (clientcert=verify-ca)' ELSE '' END AS detail FROM (SELECT f.*, EXISTS (SELECT 1 FROM unnest(coalesce(f.options, ARRAY[]::text[])) AS o WHERE lower(trim(o)) = 'clientcert=verify-ca') AS verify_ca FROM pg_hba_file_rules f WHERE f.error IS NULL) h WHERE (type LIKE 'host%' AND auth_method = 'ident' AND NOT (coalesce(address, '') ~ '^127\\.' OR address IN ('::1', 'samehost', 'localhost'))) OR verify_ca ORDER BY line_number"
+        "sql": "SELECT 'Zeile ' || line_number AS object, type || ' ' || array_to_string(database, ',') || ' ' || array_to_string(user_name, ',') || ' ' || coalesce(address, '') || ' ' || auth_method || CASE WHEN verify_ca THEN ' (clientcert=verify-ca)' ELSE '' END AS detail, coalesce(to_jsonb(h) ->> 'file_name', '') || ':' || type || ' ' || to_jsonb(database)::text || ' ' || to_jsonb(user_name)::text || ' ' || coalesce(address, '') || coalesce('/' || netmask, '') AS hba_key FROM (SELECT f.*, EXISTS (SELECT 1 FROM unnest(coalesce(f.options, ARRAY[]::text[])) AS o WHERE lower(trim(o)) = 'clientcert=verify-ca') AS verify_ca FROM pg_hba_file_rules f WHERE f.error IS NULL) h WHERE (type LIKE 'host%' AND auth_method = 'ident' AND NOT (coalesce(address, '') ~ '^127\\.' OR address IN ('::1', 'samehost', 'localhost'))) OR verify_ca ORDER BY line_number"
       },
       "fix": { "type": "manual" },
       "automation": "manual",
@@ -330,7 +330,7 @@
       "scope": "cluster",
       "check": {
         "type": "query",
-        "sql": "SELECT 'auth_delay' AS object, CASE WHEN current_setting('shared_preload_libraries') !~* '(^|[ ,/])auth_delay($|[ ,])' THEN 'auth_delay nicht geladen' ELSE 'auth_delay.milliseconds = 0, keine Verzögerung' END AS detail WHERE current_setting('shared_preload_libraries') !~* '(^|[ ,/])auth_delay($|[ ,])' OR coalesce(nullif(current_setting('auth_delay.milliseconds', true), ''), '0')::int = 0"
+        "sql": "SELECT 'auth_delay' AS object, CASE WHEN current_setting('shared_preload_libraries') !~* '(^|[ ,/])auth_delay($|[ ,])' THEN 'auth_delay nicht geladen' ELSE 'auth_delay.milliseconds = 0, keine Verzögerung' END AS detail WHERE current_setting('shared_preload_libraries') !~* '(^|[ ,/])auth_delay($|[ ,])' OR coalesce((SELECT setting FROM pg_settings WHERE name = 'auth_delay.milliseconds' AND vartype = 'integer'), '0')::int = 0"
       },
       "fix": { "type": "manual" },
       "automation": "manual",

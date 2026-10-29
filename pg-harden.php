@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * pg-harden 0.4.0
+ * pg-harden 0.4.1
  * Checks a PostgreSQL instance against a data-driven rule catalog, writes a change plan
  * and compares before/after reports.
  *
@@ -42,7 +42,7 @@ declare(strict_types=1);
  * Results and plans are suggestions: review them and test every change before applying it to production.
  */
 
-const PG_HARDEN_VERSION = '0.4.0';
+const PG_HARDEN_VERSION = '0.4.1';
 
 require_once __DIR__ . '/src/Os.php';
 require_once __DIR__ . '/src/Client.php';
@@ -1226,7 +1226,9 @@ final class Checker
         'detail' => (string) ($row['detail'] ?? ''),
         'fix_sql' => $row['fix_sql'] ?? null,
         'rollback_sql' => $row['rollback_sql'] ?? null,
-      ] + (isset($row['hba_line']) ? ['hba_line' => (int) $row['hba_line'], 'hba_type' => (string) ($row['hba_type'] ?? '')] : []);
+      ] + (isset($row['hba_line']) ? ['hba_line' => (int) $row['hba_line'], 'hba_type' => (string) ($row['hba_type'] ?? '')] : [])
+        + (isset($row['hba_file']) ? ['hba_file' => (string) $row['hba_file']] : [])
+        + (isset($row['hba_key']) ? ['hba_key' => (string) $row['hba_key']] : []);
     }
     return $out;
   }
@@ -2530,8 +2532,81 @@ final class Verifier
    */
   public static function compare(array $previous, array $current): array
   {
-    $key = fn($r, $f) => json_encode([$r['id'], $f['database'] ?? null, $f['object']], JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
-    $collect = function (array $report) use ($key): array {
+    // hba findings name their line ("Zeile 12"), and a line inserted above shifts every number after it. A rule whose
+    // findings all carry the line's selector in both reports (hba_key: file, type, databases, users, address and netmask —
+    // not the method; for broken lines file and error) is matched by the selector instead: lines with the same selector
+    // pair first by equal line number, the rest in their order. What is then left on both sides pairs by line number where
+    // only the address differs, so a line narrowed in place stays open rather than "fixed" and "new"; a line replaced by one
+    // for other databases or users is "fixed" and "new". Reports before 0.4.1 carry no selector and stay matched by line
+    // number.
+    $bySelector = [];
+    foreach ([$previous, $current] as $report) {
+      foreach ($report['results'] as $r) {
+        if ($r['status'] === 'fail') {
+          $bySelector[$r['id']] = ($bySelector[$r['id']] ?? true) && $r['findings'] !== []
+            && array_filter($r['findings'], fn($f) => !is_string($f['hba_key'] ?? null)) === [];
+        }
+      }
+    }
+    $group = fn(array $r, array $f) => json_encode([$r['id'], $f['database'] ?? null, $f['hba_key']], JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
+    $members = [];
+    foreach ([$previous, $current] as $side => $report) {
+      foreach ($report['results'] as $r) {
+        if ($r['status'] === 'fail' && ($bySelector[$r['id']] ?? false)) {
+          foreach ($r['findings'] as $f) {
+            $g = $group($r, $f);
+            // Everything but the address (the last field): file, type, databases, users — a narrowed line keeps it. A key
+            // without that shape (hba.errors: file and error text) stays whole.
+            $pos = strrpos($f['hba_key'], ' ');
+            $shaped = $pos !== false && preg_match('/:(?:local|host\w*) \[/', $f['hba_key']) === 1;
+            $members[$g]['place'] = [$r['id'], $f['database'] ?? null, $shaped ? substr($f['hba_key'], 0, $pos) : $f['hba_key']];
+            $members[$g][$side][] = $f['object'];
+          }
+        }
+      }
+    }
+    // $slots[side][group][object]: the pair numbers handed out, in order; a number shared by both sides is one line.
+    $slots = [[], []];
+    $left = [[], []];
+    $line = fn($object) => (int) preg_replace('/\D+/', '', (string) $object);
+    $n = 0;
+    foreach ($members as $g => $m) {
+      $prev = $m[0] ?? [];
+      $curr = $m[1] ?? [];
+      usort($prev, fn($a, $b) => $line($a) <=> $line($b));
+      usort($curr, fn($a, $b) => $line($a) <=> $line($b));
+      $restPrev = [];
+      foreach ($prev as $o) {
+        $k = array_search($o, $curr, true);
+        if ($k !== false) {
+          unset($curr[$k]);
+          $slots[0][$g][$o][] = $slots[1][$g][$o][] = ++$n;
+        } else {
+          $restPrev[] = $o;
+        }
+      }
+      $curr = array_values($curr);
+      $paired = min(count($restPrev), count($curr));
+      for ($i = 0; $i < $paired; $i++) {
+        $slots[0][$g][$restPrev[$i]][] = $slots[1][$g][$curr[$i]][] = ++$n;
+      }
+      foreach ([array_slice($restPrev, $paired), array_slice($curr, $paired)] as $side => $rest) {
+        foreach ($rest as $o) {
+          $slots[$side][$g][$o][] = ++$n;
+          $left[$side][json_encode([...$m['place'], $o], JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR)][] = [$g, $o, count($slots[$side][$g][$o]) - 1];
+        }
+      }
+    }
+    foreach ($left[0] as $k => $list) {
+      foreach ($list as [$g0, $o0, $i0]) {
+        if (($left[1][$k] ?? []) === []) {
+          break;
+        }
+        [$g1, $o1, $i1] = array_shift($left[1][$k]);
+        $slots[1][$g1][$o1][$i1] = $slots[0][$g0][$o0][$i0];
+      }
+    }
+    $collect = function (array $report, int $side) use ($bySelector, $group, &$slots): array {
       $set = [];
       foreach ($report['results'] as $r) {
         if ($r['status'] !== 'fail') {
@@ -2540,7 +2615,11 @@ final class Verifier
         // The previous report is a file of unknown origin: a severity outside the known ones stays empty.
         $severity = is_string($r['severity'] ?? null) && isset(Report::SEVERITY_ORDER[$r['severity']]) ? $r['severity'] : null;
         foreach ($r['findings'] as $f) {
-          $set[$key($r, $f)] = ['rule' => $r['id'], 'title' => $r['title'], 'severity' => $severity, 'object' => $f['object'], 'database' => $f['database'] ?? null];
+          $id = ($bySelector[$r['id']] ?? false)
+            ? [$r['id'], $f['database'] ?? null, 'hba', array_shift($slots[$side][$group($r, $f)][$f['object']])]
+            : [$r['id'], $f['database'] ?? null, $f['object']];
+          $set[json_encode($id, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR)]
+            = ['rule' => $r['id'], 'title' => $r['title'], 'severity' => $severity, 'object' => $f['object'], 'database' => $f['database'] ?? null];
         }
       }
       return $set;
@@ -2556,8 +2635,8 @@ final class Verifier
       }
       return $item['database'] === null ? !$r['incomplete'] : in_array($item['database'], $r['checked_databases'], true);
     };
-    $before = $collect($previous);
-    $after = $collect($current);
+    $before = $collect($previous, 0);
+    $after = $collect($current, 1);
     $fixed = [];
     $unknown = [];
     foreach (array_diff_key($before, $after) as $k => $item) {

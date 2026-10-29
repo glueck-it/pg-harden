@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.4.1 (2026-10-29)
+
+- **`auth.auth_delay` failed with an error when `auth_delay` was loaded.** `current_setting('auth_delay.milliseconds')` returns the
+  value with its unit (`500ms`), and the cast to `int` broke the rule; every report of a server with `auth_delay` showed one error
+  instead of a result. The rule now reads the raw value from `pg_settings.setting`. Tested with PostgreSQL 18 (`500` → pass) and
+  14 (loaded, `0` → finding).
+- **The comparison (`-f`) matched `pg_hba.conf` findings by line number.** A line inserted or removed above turned every open
+  finding below it into "fixed" and "new". The hba rules now return the line's selector (`hba_key`: file, type, databases, users,
+  address and netmask — not the method, so a changed method stays the same line; for `hba.errors` the file and the error text),
+  and the comparison matches a rule by it where all its findings in both reports carry one. Lines with the same selector pair
+  first by equal line number, the rest in their order; what is then left on both sides pairs by line number where only the
+  address differs, so a line narrowed in place that still has the finding stays open rather than "fixed" and "new", while a line
+  replaced by one for other databases or users counts as "fixed" and "new" (for `hba.errors`, a different error). Reports of 0.4.0 and earlier carry no selector
+  and stay matched by line number. Reports gain two fields on hba findings: `hba_key` and, for the rules `apply` changes,
+  `hba_file`. Tested with PostgreSQL 14, 16 and 18: after inserting a line at position 3, nothing fixed,
+  nothing new, every hba finding still open under its new number.
+- **`hba.host_without_tls` also reported lines that an earlier `reject` line fully covers.** A line behind `hostnossl … reject` or
+  `host … reject` cannot be reached without TLS. Covered means: the reject line comes first in evaluation order (`rule_number`
+  from PostgreSQL 16, which counts included files; the line number before), its databases include the line's (`all` does not
+  include `replication`), its users include the line's (or are `all`), and its address is `all`, the same, or a network of the
+  same family that contains the line's network. Host names and keywords such as `samenet` are covered only by `all` or the
+  identical entry. Tested with PostgreSQL 16 and 18 (with an included file) and 14 against a `pg_hba.conf` with eighteen lines.
+- **`apply` treated lines from included hba files as lines of `pg_hba.conf`** (PostgreSQL 16 and later). A finding carried only its
+  line number, so the plan aimed at the line with that number in the main file; the check of the expected form or the comparison
+  with `pg_hba_file_rules` afterwards would have stopped the run and restored the file (per `editHba`/`compareHba`, not
+  reproduced), so nothing wrong would have stayed in place, but `apply` could not run as long as an included file had a finding.
+  Findings now carry their file (`hba_file`), and `apply` leaves out every line it cannot confirm as one of `pg_hba.conf`, with a
+  note to change it by hand. Tested with PostgreSQL 16 (dry run): the main file's line planned, three lines of the included file
+  left out; with 14 the main file's line planned.
+- **`hba.superuser_remote` could miss a remote superuser line (found in the review of this release).** It took the evaluation
+  order from the line number, also across included files (PostgreSQL 16+), counted a `reject` for `::/0` as covering IPv4
+  lines and one for `0.0.0.0/0` as covering IPv6 lines, and counted `all` in the reject line as covering `replication`, which
+  PostgreSQL never matches with `all`. It now uses the same order as `hba.host_without_tls`, a `reject` for all addresses of one
+  family covers only lines of that family, `all` does not cover `replication`, and a `reject` for exactly the same address
+  covers as well. Also tested with PostgreSQL 14 and 18: `host replication postgres` behind `host all all 10.0.0.0/8 reject`
+  is reported, `host all postgres 10.0.0.0/8` behind it is not. Tested with PostgreSQL 16 and 18: a superuser line at line 18
+  of an included file, evaluated before a `reject` at line 17 of `pg_hba.conf` and after a `hostnossl … ::/0 reject`, is now
+  reported.
+- Found while preparing the seminar "PostgreSQL Security und Härtung".
+
 ## 0.4.0 (2026-10-29)
 
 - **Security fix — update if you run pg-harden as administrator on Windows.** Affected: 0.3.0 to 0.3.2 on Windows. Windows has no

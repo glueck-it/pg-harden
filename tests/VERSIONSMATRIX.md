@@ -1,4 +1,4 @@
-# Versionsmatrix PostgreSQL 14 bis 19 (Stand 29.10.2026, Programmstand 0.4.0)
+# Versionsmatrix PostgreSQL 14 bis 19 (Stand 29.10.2026, Programmstand 0.4.1)
 
 Getestet mit `tests/run-version-matrix.sh`: je Version ein Container (`postgres:14-trixie` … `postgres:18-trixie`, `postgres:19rc1`,
 Debian 13, PHP 8.4.27, als root im Container, Datenverzeichnis lokal, Vertrauensanmeldung wie in `lab/`). Die Versionen meldete der
@@ -6,7 +6,15 @@ Server selbst (`show server_version`): 14.24, 15.19, 16.15, 17.11, 18.6 und 19rc
 am 28. und 29.10.2026 unverändert. Mit Programmstand 0.3.0 (24.10.2026), 0.3.1 (25.10.2026) und 0.3.2 (26.10.2026) ergab die Matrix
 dieselbe Statustabelle; mit 0.4.0 (28.10.2026) kommen nur die Zeilen der neuen Regeln hinzu, die übrigen sind unverändert. Mit dem
 Endstand von 0.4.0 (29.10.2026, Kommandozeile `-o`/`-f`) erneut gefahren: Statustabelle gleich, `lab-matrix.sh` und
-`lab-visibility.sh` in allen sechs Versionen grün.
+`lab-visibility.sh` in allen sechs Versionen grün. Mit Programmstand 0.4.1 (29.10.2026: `auth.auth_delay`,
+Vergleich der hba-Befunde, `hba.host_without_tls`, `apply` und eingebundene hba-Dateien, `hba.superuser_remote`) erneut gefahren: keine Regel mit Fehler, dieselben Unterschiede zwischen den
+Versionen wie unten. Zusätzlich gezielt gegen PostgreSQL 18 und 14 mit geladenem `auth_delay` (500 ms → ok, 0 → Befund) und gegen 14, 16 und 18 mit
+einer `pg_hba.conf` mit achtzehn Zeilen, auf 16 und 18 dazu mit einer eingebundenen Datei (abgedeckt durch eine vorangehende `hostnossl … reject`
+oder `host … reject`: gleiches Netz, enthaltenes IPv4- und IPv6-Netz, `all`, Zeile der eingebundenen Datei; nicht abgedeckt:
+`replication` unter `all`, weitere Benutzer, Hostname, IPv6 ohne passende Zeile davor); nach einer an Position 3 eingefügten Zeile
+ergab `check -f` nichts behoben, nichts neu, alle hba-Befunde weiter offen. `apply` (Trockenlauf, PostgreSQL 16 und 18) plant die
+`md5`-Zeile der Hauptdatei und lässt die drei der eingebundenen Datei mit Hinweis aus; auf 14 plant es die Zeile der Hauptdatei. `hba.superuser_remote` meldet auf 16 und 18 die Superuser-Zeile in Zeile 18 der
+eingebundenen Datei, die vor dem `reject` in Zeile 17 der Hauptdatei und nach einem `hostnossl … ::/0 reject` ausgewertet wird.
 PostgreSQL 19 ist ein Release Candidate; die Veröffentlichung ist laut der Ankündigung von RC 1 auf postgresql.org (Stand 24.10.2026)
 für den 19.11.2026 geplant. Die Spalte 19rc1 ist eine Vorabprüfung, kein Freigabevermerk.
 
